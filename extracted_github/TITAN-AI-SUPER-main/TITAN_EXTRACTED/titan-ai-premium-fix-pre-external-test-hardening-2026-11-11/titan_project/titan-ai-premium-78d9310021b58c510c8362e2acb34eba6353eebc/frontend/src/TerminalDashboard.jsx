@@ -78,7 +78,7 @@ export default function TerminalDashboard() {
       const e = ['testnet','live'].includes(target) ? target : (s?.state?.environment_mode || 'demo')
       setMarket(m)
       setSelectedTarget(target)
-      if(s?.state?.live_confirmed_by_user===true) setLiveApproval(true)
+      setLiveApproval(s?.state?.live_confirmed_by_user===true)
       try { setPortfolio(await api.portfolio(e,m)) } catch { setPortfolio(null) }
     } catch (e) { setMessage('تعذر الاتصال بخادم TITAN: '+e.message) }
   },[market])
