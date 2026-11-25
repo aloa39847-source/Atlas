@@ -47,6 +47,8 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     let shadowOrders = 0
     let providerTests = 0
     let depthSnapshotLimit = null
+    let riskSimulationCalls = 0
+    let futuresOrderbookBacktests = 0
 
     await page.addInitScript(() => {
       class FakeWebSocket {
@@ -94,6 +96,8 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
       else if (path === '/api/shadow/order') { shadowOrders += 1; body = { ok: true, order_id: 'shadow-test-1' } }
       else if (path === '/api/ai/providers/1/test') { providerTests += 1; body = { ok: true } }
       else if (path === '/api/ai/providers/1') body = { ok: true }
+      else if (path === '/api/backtest/risk-simulation') { riskSimulationCalls += 1; body = { final_equity: 1015, net_pnl: 15, total_return: 0.015, max_drawdown_quote: 25, max_drawdown_pct: 0.025, total_trades: 4, fees_paid: 0, slippage_cost: 0, daily_limit_blocks: 0, results: [] } }
+      else if (path === '/api/backtest/orderflow/futures-orderbook') { futuresOrderbookBacktests += 1; body = { data_source: 'test-fixture', depth_snapshots: 12, generated_signals: 2, total_trades: 1, win_rate: 1, total_return: 0.01, final_equity: 1010, fees_paid: 0.4, funding_net: 0 } }
       else body = { ok: true, items: [], configured: false, connected: false }
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
     })
@@ -167,6 +171,20 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
       await page.locator('.tt-nav').getByRole('button', { name: new RegExp(label) }).click()
       await page.getByText(heading).waitFor()
     }
+
+    await page.locator('.tt-nav').getByRole('button', { name: /المخاطر/ }).click()
+    await page.getByRole('heading', { name: /محاكي إدارة المخاطر/ }).waitFor()
+    const riskPanel = page.locator('.card').filter({ hasText: 'محاكي إدارة المخاطر' }).last()
+    await riskPanel.locator('select').first().selectOption('pnl_sequence')
+    await riskPanel.getByRole('button', { name: 'تشغيل محاكاة المخاطر' }).click()
+    await page.getByText('1015', { exact: true }).waitFor()
+    assert.equal(riskSimulationCalls, 1, 'risk simulation panel did not call its backend API')
+
+    await page.locator('.tt-nav').getByRole('button', { name: /الاستراتيجيات/ }).click()
+    await page.getByRole('heading', { name: /دفتر أوامر Futures التاريخي/ }).waitFor()
+    await page.getByRole('button', { name: 'اختبار Order Flow من دفتر الأوامر' }).click()
+    await page.getByText('test-fixture', { exact: true }).waitFor()
+    assert.equal(futuresOrderbookBacktests, 1, 'Futures orderbook history panel did not call its backend API')
 
     await page.locator('.tt-nav').getByRole('button', { name: /التداول/ }).click()
     await page.getByRole('button', { name: 'شراء', exact: true }).click()
