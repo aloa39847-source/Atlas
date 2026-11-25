@@ -1,6 +1,9 @@
 name: ATLAS Autonomous Trader CI
 
 on:
+  push:
+    branches:
+      - "atlas/**"
   pull_request:
     branches:
       - main
@@ -10,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: atlas-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: atlas-ci-${{ github.workflow }}-development
   cancel-in-progress: true
 
 env:
