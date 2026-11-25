@@ -138,7 +138,7 @@ async def system_status(request: Request):
             pass
         try:
             live_status = _get_binance_live_adapter(state_snapshot.get("market_type", "spot"), db).status()
-            live_status["server_live_enabled"] = True
+            live_status["server_live_enabled"] = bool(settings.live_trading_enabled)
             live_status["user_live_confirmed"] = bool(state_snapshot.get("live_confirmed_by_user"))
         except Exception:
             pass
@@ -3112,8 +3112,9 @@ async def binance_live_status(request):
         return J({
             **status,
             "live_blocked": not bool(status.get("execution_ready")),
-            "server_live_enabled": True,
+            "server_live_enabled": bool(settings.live_trading_enabled),
             "user_live_confirmed": bool(state.get("live_confirmed_by_user")),
+            "live_start_required": not bool(state.get("live_confirmed_by_user")),
             "selected_account": state.get("account_target"),
             "orders_submitted": False,
             "note": ("Live account is connected for read-only monitoring. Start Live explicitly in TITAN before any order can be sent."
@@ -3451,10 +3452,22 @@ async def binance_live_creds_status(request):
     if market not in {"spot", "futures"}:
         return J({"ok": False, "error": "unsupported_live_market"}, 400)
     creds = load_binance_credentials("live", market)
-    return J({"configured": bool(creds.get("configured")), "market": market,
-              "environment": "live", "has_secret": bool(creds.get("configured")),
-              "server_live_enabled": True,
-              "live_blocked": not bool(creds.get("configured"))})
+    db = db_sess()
+    try:
+        state = core_service.get_state(db)
+        configured = bool(creds.get("configured"))
+        server_live_enabled = bool(settings.live_trading_enabled)
+        user_live_confirmed = bool(state.get("live_confirmed_by_user"))
+        return J({
+            "configured": configured, "market": market,
+            "environment": "live", "has_secret": configured,
+            "server_live_enabled": server_live_enabled,
+            "user_live_confirmed": user_live_confirmed,
+            "live_start_required": not user_live_confirmed,
+            "live_blocked": not (configured and server_live_enabled and user_live_confirmed),
+        })
+    finally:
+        db.close()
 
 
 async def binance_live_delete(request):
