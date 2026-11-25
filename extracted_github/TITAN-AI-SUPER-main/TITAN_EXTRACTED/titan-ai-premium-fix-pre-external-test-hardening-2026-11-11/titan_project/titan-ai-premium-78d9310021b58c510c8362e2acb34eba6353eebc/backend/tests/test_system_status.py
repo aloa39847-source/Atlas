@@ -46,6 +46,10 @@ def test_system_status_reports_actual_sanitized_integrations(monkeypatch):
     assert result["integrations"]["binance"]["status"] == "credentials_configured_not_connected"
     assert result["integrations"]["binance"]["connection_checked"] is False
     assert result["integrations"]["binance"]["orders_submitted"] is False
+    assert result["integrations"]["binance"]["server_live_enabled"] is bool(settings.live_trading_enabled)
+    assert result["integrations"]["binance"]["user_live_confirmed"] is False
+    assert result["integrations"]["binance"]["live_start_required"] is True
+    assert result["integrations"]["binance"]["execution_ready"] is False
     assert result["integrations"]["ai_providers"]["status"] == "connection_tested"
     assert result["integrations"]["ai_providers"]["enabled_analysis_advisors"] == 2
     assert result["integrations"]["ai_providers"]["connection_tested_count"] == 2
