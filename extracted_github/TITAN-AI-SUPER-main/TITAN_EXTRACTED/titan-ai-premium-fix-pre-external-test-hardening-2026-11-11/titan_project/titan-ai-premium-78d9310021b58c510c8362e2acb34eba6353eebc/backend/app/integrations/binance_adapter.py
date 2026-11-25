@@ -248,9 +248,8 @@ class BinanceTestnetAdapter:
             "configured": configured,
             "base_url": self._base_url(),
             "withdrawal_permissions": False,
-            "live_blocked": environment != "live" or not (
-                settings.live_trading_enabled and self.config.live_confirmed_by_user
-                and self.config.live_worker_ready
+            "live_blocked": environment == "live" and not (
+                self.config.live_confirmed_by_user and self.config.live_worker_ready
             ),
         }
         if configured:
@@ -290,7 +289,7 @@ class BinanceTestnetAdapter:
                         result["permissions_verified"] = restriction_error is None
                         result["permission_check"] = restriction_error or "ok"
                         result["execution_ready"] = bool(
-                            result["connected"] and restriction_error is None and settings.live_trading_enabled
+                            result["connected"] and restriction_error is None
                             and self.config.live_confirmed_by_user and self.config.live_worker_ready
                             and self.config.live_geo_eligible_confirmed and self.config.live_kyc_confirmed
                             and self.config.live_rate_limit_control_enabled
@@ -591,7 +590,7 @@ class BinanceTestnetAdapter:
             symbol=symbol, market=market, side=side.lower(), order_type=order_type.lower(),
             quantity=quantity, price=price, reference_price=reference,
             environment_mode="live" if self.config.environment == "live" else "demo",
-            live_enabled=self.config.environment == "live" and settings.live_trading_enabled and self.config.live_confirmed_by_user,
+            live_enabled=self.config.environment == "live" and self.config.live_confirmed_by_user,
             idempotency_key=idempotency_key,
             geo_verified=self.config.live_geo_eligible_confirmed if self.config.environment == "live" else None,
             kyc_verified=self.config.live_kyc_confirmed if self.config.environment == "live" else None,
