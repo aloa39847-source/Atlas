@@ -618,3 +618,30 @@ def test_live_execution_is_blocked_when_server_live_switch_is_disabled(tmp_path,
     finally:
         db.close()
         engine.dispose()
+
+
+
+def test_set_state_rejects_live_confirmation_when_server_switch_is_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'live_server_disabled_state.db'}",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    monkeypatch.setattr(dbmod, "engine", engine)
+    monkeypatch.setattr(dbmod, "SessionLocal", factory)
+    monkeypatch.setattr(dbmod, "init_db", lambda: dbmod.Base.metadata.create_all(bind=engine))
+    dbmod.init_db()
+    db = factory()
+    try:
+        core_service.ensure_bootstrap(db)
+        import pytest
+        with pytest.raises(ValueError, match="live_trading_disabled_by_server"):
+            core_service.set_state(db, account_target="live", live_confirm=True)
+        state = db.get(SystemState, 1)
+        assert state.live_confirmed_by_user is False
+        assert state.live_trading_enabled is False
+    finally:
+        db.close()
+        engine.dispose()
