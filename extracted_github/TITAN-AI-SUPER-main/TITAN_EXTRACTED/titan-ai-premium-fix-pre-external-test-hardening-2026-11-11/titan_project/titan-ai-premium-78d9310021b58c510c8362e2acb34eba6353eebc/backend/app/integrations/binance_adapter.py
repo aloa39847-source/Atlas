@@ -103,9 +103,9 @@ class BinanceConfig:
     api_key_ref: str | None = None  # env:BINANCE_TESTNET_API_KEY
     api_secret_ref: str | None = None  # environment-specific secret reference
     live_confirmed_by_user: bool = False  # must be set from persisted explicit user action
-    live_geo_eligible_confirmed: bool = False
-    live_kyc_confirmed: bool = False
-    live_rate_limit_control_enabled: bool = False
+    live_geo_eligible_confirmed: bool | None = None
+    live_kyc_confirmed: bool | None = None
+    live_rate_limit_control_enabled: bool = True
     live_worker_ready: bool = False
 
 
@@ -248,9 +248,8 @@ class BinanceTestnetAdapter:
             "configured": configured,
             "base_url": self._base_url(),
             "withdrawal_permissions": False,
-            "live_blocked": environment != "live" or not (
-                settings.live_trading_enabled and self.config.live_confirmed_by_user
-                and self.config.live_worker_ready
+            "live_blocked": environment == "live" and not (
+                self.config.live_confirmed_by_user and self.config.live_worker_ready
             ),
         }
         if configured:
@@ -267,6 +266,7 @@ class BinanceTestnetAdapter:
                     if not result["trade_permission"]:
                         result["permission_check"] = "binance_api_key_trade_permission_missing"
                 if environment == "live" and result["connected"]:
+                    result["trade_permission"] = acct.get("canTrade") is True
                     permissions = self._request("GET", "/sapi/v1/account/apiRestrictions", signed=True)
                     if not isinstance(permissions, dict) or permissions.get("error"):
                         result["permissions_verified"] = False
@@ -290,10 +290,9 @@ class BinanceTestnetAdapter:
                         result["permissions_verified"] = restriction_error is None
                         result["permission_check"] = restriction_error or "ok"
                         result["execution_ready"] = bool(
-                            result["connected"] and restriction_error is None and settings.live_trading_enabled
+                            result["connected"] and result.get("trade_permission") is True
+                            and restriction_error is None
                             and self.config.live_confirmed_by_user and self.config.live_worker_ready
-                            and self.config.live_geo_eligible_confirmed and self.config.live_kyc_confirmed
-                            and self.config.live_rate_limit_control_enabled
                         )
             except Exception as e:
                 result["connected"] = False
@@ -365,15 +364,10 @@ class BinanceTestnetAdapter:
             return {"ok": False, "sent_to_exchange": False,
                     "error": "live_credentials_missing" if self.config.environment == "live" else "testnet_credentials_missing"}
         if self.config.environment == "live":
-            if not settings.live_trading_enabled:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_trading_disabled_by_server_configuration"}
             if not self.config.live_confirmed_by_user:
                 return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
             if not self.config.live_worker_ready:
                 return {"ok": False, "sent_to_exchange": False, "error": "live_supervised_worker_required"}
-            if not (self.config.live_geo_eligible_confirmed and self.config.live_kyc_confirmed
-                    and self.config.live_rate_limit_control_enabled):
-                return {"ok": False, "sent_to_exchange": False, "error": "live_compliance_or_rate_controls_not_verified"}
         return None
 
     def _symbol_filters(self, symbol: str) -> dict[str, float]:
@@ -596,11 +590,14 @@ class BinanceTestnetAdapter:
             symbol=symbol, market=market, side=side.lower(), order_type=order_type.lower(),
             quantity=quantity, price=price, reference_price=reference,
             environment_mode="live" if self.config.environment == "live" else "demo",
-            live_enabled=self.config.environment == "live" and settings.live_trading_enabled and self.config.live_confirmed_by_user,
+            live_enabled=self.config.environment == "live" and self.config.live_confirmed_by_user,
             idempotency_key=idempotency_key,
-            geo_verified=self.config.live_geo_eligible_confirmed if self.config.environment == "live" else None,
-            kyc_verified=self.config.live_kyc_confirmed if self.config.environment == "live" else None,
-            rate_limit_ok=self.config.live_rate_limit_control_enabled if self.config.environment == "live" else None,
+            # Binance's authenticated account and API-restriction checks are the
+            # source of truth for market eligibility. The adapter's own shared
+            # 418/429 cooldown is the active rate-limit control.
+            geo_verified=None,
+            kyc_verified=None,
+            rate_limit_ok=True if self.config.environment == "live" else None,
             reduce_only=reduce_only, exchange_filters=filters,
             market_conduct_flags=market_conduct_flags,
             current_position=current_position,

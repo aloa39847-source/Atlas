@@ -375,8 +375,6 @@ class TitanCoreService:
             }
         else:
             if target == "live":
-                if not settings.live_trading_enabled:
-                    raise ValueError("live_trading_disabled_by_server_configuration")
                 if live_confirm is not True or not bool(getattr(s, "live_confirmed_by_user", False)):
                     raise ValueError("live_requires_explicit_user_confirmation")
             from app.services.binance_execution import binance_execution_service

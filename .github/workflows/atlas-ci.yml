@@ -1,0 +1,165 @@
+name: ATLAS Autonomous Trader CI
+
+on:
+  push:
+    branches:
+      - "atlas/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-ci-${{ github.workflow }}-development
+  cancel-in-progress: true
+
+env:
+  PROJECT_DIR: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+
+jobs:
+  backend:
+    name: Backend compile and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+      TITAN_AUTH_REQUIRED: "false"
+      TITAN_DATABASE_URL: "sqlite:////tmp/atlas_ci_test.db"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r "${PROJECT_DIR}/backend/requirements.txt"
+      - name: Compile backend modules
+        run: python -m compileall -q "${PROJECT_DIR}/backend/app" "${PROJECT_DIR}/backend/tests"
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install --upgrade pip-audit
+          set +e
+          pip-audit -r "${PROJECT_DIR}/backend/requirements.txt" --format=columns
+          audit_status=$?
+          pip-audit -r "${PROJECT_DIR}/backend/requirements.txt" --format=json > backend-audit.json
+          exit $audit_status
+      - name: Run backend test suite
+        run: python -m pytest -q "${PROJECT_DIR}/backend/tests" --junitxml=backend-test-results.xml
+      - name: Upload backend test and dependency reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-reports-${{ github.run_id }}
+          path: |
+            backend-test-results.xml
+            backend-audit.json
+          if-no-files-found: ignore
+
+  frontend:
+    name: Frontend tests and production builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: npm ci
+      - name: Build frontend (same-origin API)
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: npm run build
+      - name: Run API integration tests
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: npm run test:api
+      - name: Run runtime and market stream tests
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: npm run test:runtime
+      - name: Install pinned Playwright browser-test runtime
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: |
+          npm install --no-save --package-lock=false playwright@1.65.1
+          npx playwright install --with-deps chromium
+      - name: Run browser integration tests
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: npm run test:browser
+      - name: Build frontend (separate backend origin)
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        env:
+          VITE_API_BASE_URL: https://backend.example.test
+        run: npm run build -- --outDir dist-api-origin
+      - name: Enforce frontend dependency security audit
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: |
+          set +e
+          npm audit --audit-level=moderate --json > npm-audit.json
+          audit_status=$?
+          node -e "const a=require('./npm-audit.json'); for (const [name,v] of Object.entries(a.vulnerabilities||{})) console.log(JSON.stringify({name,severity:v.severity,range:v.range,fixAvailable:v.fixAvailable}))"
+          exit $audit_status
+      - name: Upload frontend dependency audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dependency-audit-${{ github.run_id }}
+          path: ${{ env.PROJECT_DIR }}/frontend/npm-audit.json
+          if-no-files-found: ignore
+
+  demo-shadow-smoke:
+    name: Read-only Demo shadow smoke
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PYTHONPATH: ${{ github.workspace }}/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+      TITAN_AUTH_REQUIRED: "false"
+      TITAN_DATABASE_URL: "sqlite:////tmp/atlas_demo_shadow_ci.db"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r "${PROJECT_DIR}/backend/requirements.txt"
+      - name: Run isolated read-only Demo shadow cycle
+        working-directory: ${{ env.PROJECT_DIR }}/backend
+        run: python -m app.scripts.run_demo_smoke
+
+  demo-worker-soak:
+    name: 30-minute isolated Demo shadow stability test
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONPATH: ${{ github.workspace }}/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+      TITAN_AUTH_REQUIRED: "false"
+      TITAN_DATABASE_URL: "sqlite:////tmp/atlas_demo_soak_ci.db"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r "${PROJECT_DIR}/backend/requirements.txt"
+      - name: Run 30-minute supervised Demo/Shadow soak
+        working-directory: ${{ env.PROJECT_DIR }}/backend
+        run: python -m app.scripts.run_demo_soak
+
+  container-build:
+    name: Production container build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build production Docker image
+        run: docker build --pull -t atlas-autonomous-trader:ci "${PROJECT_DIR}"

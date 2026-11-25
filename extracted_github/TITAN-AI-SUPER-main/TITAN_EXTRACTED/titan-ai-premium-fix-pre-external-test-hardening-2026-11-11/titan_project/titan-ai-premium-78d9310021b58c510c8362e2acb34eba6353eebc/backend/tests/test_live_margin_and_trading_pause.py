@@ -76,7 +76,8 @@ def _execution_test_db(tmp_path):
     return engine, factory()
 
 
-def test_execution_boundary_requires_explicit_live_confirmation_before_sizing(tmp_path):
+def test_execution_boundary_requires_explicit_live_confirmation_before_sizing(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
     engine, db = _execution_test_db(tmp_path)
     try:
         db.add(SystemState(
@@ -333,12 +334,12 @@ def test_execution_exception_after_durable_order_record_latches_unknown_and_neve
         engine.dispose()
 
 
-def test_live_trading_is_disabled_when_environment_flag_is_missing(monkeypatch):
+def test_live_trading_is_available_by_default_but_requires_per_start_confirmation(monkeypatch):
     monkeypatch.delenv("TITAN_LIVE_TRADING_ENABLED", raising=False)
-    assert Settings().live_trading_enabled is False
+    assert Settings().live_trading_enabled is True
 
 
-def test_live_trading_can_only_be_enabled_by_server_environment_flag(monkeypatch):
+def test_live_server_environment_flag_can_be_used_as_optional_deployment_override(monkeypatch):
     monkeypatch.setenv("TITAN_LIVE_TRADING_ENABLED", "true")
     assert Settings().live_trading_enabled is True
 

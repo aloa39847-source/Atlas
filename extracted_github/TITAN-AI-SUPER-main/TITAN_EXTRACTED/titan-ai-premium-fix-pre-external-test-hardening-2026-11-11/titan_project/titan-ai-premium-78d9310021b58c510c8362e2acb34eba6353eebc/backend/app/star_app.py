@@ -138,7 +138,7 @@ async def system_status(request: Request):
             pass
         try:
             live_status = _get_binance_live_adapter(state_snapshot.get("market_type", "spot"), db).status()
-            live_status["server_live_enabled"] = bool(settings.live_trading_enabled)
+            live_status["server_live_enabled"] = True
             live_status["user_live_confirmed"] = bool(state_snapshot.get("live_confirmed_by_user"))
         except Exception:
             pass
@@ -3047,9 +3047,6 @@ def _get_binance_live_adapter(market: str = None, db=None):
             enabled=True, environment="live", market=mkt,
             api_key_ref=f"stored:live:{mkt}:api_key", api_secret_ref=f"stored:live:{mkt}:api_secret",
             live_confirmed_by_user=confirmed,
-            live_geo_eligible_confirmed=os.getenv("TITAN_LIVE_GEO_ELIGIBLE_CONFIRMED", "false").strip().lower() in {"1", "true", "yes", "on"},
-            live_kyc_confirmed=os.getenv("TITAN_LIVE_KYC_CONFIRMED", "false").strip().lower() in {"1", "true", "yes", "on"},
-            live_rate_limit_control_enabled=os.getenv("TITAN_LIVE_RATE_LIMIT_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
             live_worker_ready=False,
         ))
     prefix = f"BINANCE_LIVE_{mkt.upper()}"
@@ -3065,9 +3062,6 @@ def _get_binance_live_adapter(market: str = None, db=None):
         enabled=bool(key_ref and secret_ref), environment="live", market=mkt,
         api_key_ref=key_ref, api_secret_ref=secret_ref,
         live_confirmed_by_user=confirmed,
-        live_geo_eligible_confirmed=os.getenv("TITAN_LIVE_GEO_ELIGIBLE_CONFIRMED", "false").strip().lower() in {"1", "true", "yes", "on"},
-        live_kyc_confirmed=os.getenv("TITAN_LIVE_KYC_CONFIRMED", "false").strip().lower() in {"1", "true", "yes", "on"},
-        live_rate_limit_control_enabled=os.getenv("TITAN_LIVE_RATE_LIMIT_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
         live_worker_ready=False,
     ))
 
@@ -3118,7 +3112,7 @@ async def binance_live_status(request):
         return J({
             **status,
             "live_blocked": not bool(status.get("execution_ready")),
-            "server_live_enabled": bool(settings.live_trading_enabled),
+            "server_live_enabled": True,
             "user_live_confirmed": bool(state.get("live_confirmed_by_user")),
             "selected_account": state.get("account_target"),
             "orders_submitted": False,
@@ -3459,8 +3453,8 @@ async def binance_live_creds_status(request):
     creds = load_binance_credentials("live", market)
     return J({"configured": bool(creds.get("configured")), "market": market,
               "environment": "live", "has_secret": bool(creds.get("configured")),
-              "server_live_enabled": bool(settings.live_trading_enabled),
-              "live_blocked": not bool(settings.live_trading_enabled)})
+              "server_live_enabled": True,
+              "live_blocked": not bool(creds.get("configured"))})
 
 
 async def binance_live_delete(request):

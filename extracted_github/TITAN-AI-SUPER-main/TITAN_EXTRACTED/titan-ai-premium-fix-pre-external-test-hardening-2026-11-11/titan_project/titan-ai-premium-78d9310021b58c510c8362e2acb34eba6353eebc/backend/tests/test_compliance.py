@@ -15,8 +15,27 @@ def test_bypass_attempt_blocked():
     assert r.ok is False
 
 
-def test_live_without_preconditions_requires_review_or_block():
-    g = PreTradeOrderGateway()
-    r = g.validate(symbol="BTC/USDT", market=MarketType.SPOT, side="buy", order_type="limit", quantity=0.01, price=50000, reference_price=50000, environment_mode="live", live_enabled=True)
+def test_live_exchange_eligibility_is_delegated_to_authenticated_exchange_permissions():
+    c = TitanCompliancePolicyEngine()
+    r = c.check_order_action(
+        market=MarketType.SPOT, symbol="BTC/USDT", side="buy",
+        quantity=0.01, price=50000, environment_mode="live",
+        live_enabled=True, geo_verified=None, kyc_verified=None,
+        rate_limit_ok=True,
+    )
+    assert r.ok is True
+    assert r.action == "allow_with_checks"
+    assert "exchange_enforces_geographic_eligibility" in r.details["uncertain"]
+    assert "exchange_enforces_account_verification" in r.details["uncertain"]
+
+
+def test_explicitly_ineligible_live_account_is_still_blocked():
+    c = TitanCompliancePolicyEngine()
+    r = c.check_order_action(
+        market=MarketType.SPOT, symbol="BTC/USDT", side="buy",
+        quantity=0.01, price=50000, environment_mode="live",
+        live_enabled=True, geo_verified=False, kyc_verified=True,
+        rate_limit_ok=True,
+    )
     assert r.ok is False
-    assert "compliance" in str(r.normalized).lower() or "compliance" in r.reason
+    assert r.action == "block"

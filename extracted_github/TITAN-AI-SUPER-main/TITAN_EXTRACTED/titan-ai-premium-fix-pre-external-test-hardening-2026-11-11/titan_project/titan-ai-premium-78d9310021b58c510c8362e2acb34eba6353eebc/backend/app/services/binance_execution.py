@@ -70,9 +70,6 @@ class BinanceExecutionService:
                 environment="live", market=market,
                 api_key_ref=key_ref, api_secret_ref=secret_ref,
                 live_confirmed_by_user=bool(getattr(state, "live_confirmed_by_user", False)),
-                live_geo_eligible_confirmed=_flag("TITAN_LIVE_GEO_ELIGIBLE_CONFIRMED"),
-                live_kyc_confirmed=_flag("TITAN_LIVE_KYC_CONFIRMED"),
-                live_rate_limit_control_enabled=_flag("TITAN_LIVE_RATE_LIMIT_CONTROL_ENABLED"),
                 live_worker_ready=bool(live_worker_ready),
             ))
         raise ValueError("binance_execution_requires_testnet_or_live_account_target")
@@ -87,10 +84,6 @@ class BinanceExecutionService:
         if bool(state.emergency_stop) and not allow_emergency_exit:
             return {"ok": False, "ready": False, "error": "emergency_stop_active"}
         target = str(getattr(state, "account_target", "demo") or "demo").lower()
-        if target == "live" and not settings.live_trading_enabled:
-            return {"ok": False, "ready": False,
-                    "error": "live_trading_disabled_by_server_configuration",
-                    "orders_submitted": False}
         record = None
         try:
             adapter = self.adapter_for(state, live_worker_ready=live_worker_ready)
@@ -199,10 +192,9 @@ class BinanceExecutionService:
         environment = target
         if target not in {"testnet", "live"}:
             return {"ok": False, "sent_to_exchange": False, "error": "external_execution_requires_binance_account"}
-        if target == "live" and (
-            not settings.live_trading_enabled or not bool(getattr(state, "live_confirmed_by_user", False))
-        ):
-            return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
+        if target == "live" and not bool(getattr(state, "live_confirmed_by_user", False)):
+            return {"ok": False, "sent_to_exchange": False,
+                    "error": "live_requires_explicit_user_confirmation"}
         if not isinstance(idempotency_key, str) or len(idempotency_key.strip()) < 8:
             return {"ok": False, "sent_to_exchange": False, "error": "valid_idempotency_key_required"}
         # Idempotency lookup must precede worker/emergency-stop gates: a replay
