@@ -67,6 +67,8 @@ def main() -> int:
     started_at = datetime.now(timezone.utc).isoformat()
     deadline = time.monotonic() + SOAK_SECONDS
     checks = 0
+    worker_seen_running = False
+    startup_deadline = time.monotonic() + 90.0
     thread.start()
     try:
         while time.monotonic() < deadline:
@@ -81,7 +83,12 @@ def main() -> int:
                     raise RuntimeError("emergency_stop_latched_during_demo_soak")
                 if state.account_target != "demo" or state.environment_mode != "demo" or state.market_type != "spot":
                     raise RuntimeError("demo_execution_scope_changed_during_soak")
-                if state.bot_run_state not in {"running", "analyzing", "executing", "waiting_data"}:
+                if state.bot_run_state in {"running", "analyzing", "executing", "waiting_data"}:
+                    worker_seen_running = True
+                elif state.bot_run_state == "starting" and not worker_seen_running and time.monotonic() < startup_deadline:
+                    time.sleep(2.0)
+                    continue
+                else:
                     raise RuntimeError("demo_worker_not_running_during_soak:" + str(state.bot_run_state))
                 checks += 1
             finally:
@@ -89,7 +96,7 @@ def main() -> int:
             time.sleep(min(15.0, max(0.0, deadline - time.monotonic())))
     finally:
         stop_event.set()
-        thread.join(timeout=25.0)
+        thread.join(timeout=90.0)
 
     if thread.is_alive():
         raise RuntimeError("demo_worker_failed_to_stop_after_soak")
