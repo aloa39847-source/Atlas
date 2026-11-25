@@ -64,6 +64,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: ${{ env.PROJECT_DIR }}/frontend
         run: npm ci
+      - name: Build frontend (same-origin API)
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: npm run build
       - name: Run API integration tests
         working-directory: ${{ env.PROJECT_DIR }}/frontend
         run: npm run test:api
@@ -73,14 +76,23 @@ jobs:
       - name: Run browser integration tests
         working-directory: ${{ env.PROJECT_DIR }}/frontend
         run: npm run test:browser
-      - name: Build frontend (same-origin API)
-        working-directory: ${{ env.PROJECT_DIR }}/frontend
-        run: npm run build
       - name: Build frontend (separate backend origin)
         working-directory: ${{ env.PROJECT_DIR }}/frontend
         env:
           VITE_API_BASE_URL: https://backend.example.test
         run: npm run build -- --outDir dist-api-origin
+      - name: Report dependency audit findings
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: |
+          npm audit --json > npm-audit.json || true
+          node -e "const a=require('./npm-audit.json'); for (const [name,v] of Object.entries(a.vulnerabilities||{})) console.log(JSON.stringify({name,severity:v.severity,range:v.range,fixAvailable:v.fixAvailable}))"
+      - name: Upload frontend dependency audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dependency-audit-${{ github.run_id }}
+          path: ${{ env.PROJECT_DIR }}/frontend/npm-audit.json
+          if-no-files-found: ignore
 
   demo-shadow-smoke:
     name: Read-only Demo shadow smoke
