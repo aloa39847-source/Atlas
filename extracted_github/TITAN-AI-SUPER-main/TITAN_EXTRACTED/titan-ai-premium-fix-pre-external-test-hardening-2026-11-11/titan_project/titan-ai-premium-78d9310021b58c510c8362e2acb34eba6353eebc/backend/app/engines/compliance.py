@@ -127,18 +127,17 @@ class TitanCompliancePolicyEngine:
                                      "Back off, respect rate limits, and retry only according to official API rules.")
         uncertain = []
         if geo_verified is None:
-            uncertain.append("geo_eligibility_unverified")
+            uncertain.append("exchange_enforces_geographic_eligibility")
         if kyc_verified is None:
-            uncertain.append("kyc_status_unverified")
+            uncertain.append("exchange_enforces_account_verification")
         if rate_limit_ok is None:
             uncertain.append("rate_limit_state_unverified")
         details = {"market": market.value, "symbol": symbol, "side": side, "environment_mode": environment_mode, "uncertain": uncertain,
-                   "exchange_symbol_filters_checked": False, "official_terms_version_checked": False}
-        if environment_mode == "live" and uncertain:
-            return ComplianceFinding(False, "review_required", "live_preconditions_unverified", "pre_trade_review", self._sources(),
-                                     "Verify eligibility, KYC, API limits, symbol filters, and official terms before any Live action.", details)
-        return ComplianceFinding(True, "allow_with_checks", "basic_compliance_precheck_passed", "pre_trade", self._sources(),
-                                 "Complete exchange filter/reconciliation/rate-limit checks before sending any real order.", details)
+                   "exchange_symbol_filters_checked": False, "official_terms_version_checked": False,
+                   "eligibility_source": "authenticated_exchange_account_permissions",
+                   "rate_limit_source": "adapter_shared_418_429_cooldown" if rate_limit_ok is True else "pending"}
+        return ComplianceFinding(True, "allow_with_checks", "exchange_permissions_and_local_controls_required", "pre_trade", self._sources(),
+                                 "Binance must confirm the selected market's trading permission and API restrictions; local order filters, reconciliation, and rate-limit cooldown remain mandatory.", details)
 
 
 compliance_engine = TitanCompliancePolicyEngine()
