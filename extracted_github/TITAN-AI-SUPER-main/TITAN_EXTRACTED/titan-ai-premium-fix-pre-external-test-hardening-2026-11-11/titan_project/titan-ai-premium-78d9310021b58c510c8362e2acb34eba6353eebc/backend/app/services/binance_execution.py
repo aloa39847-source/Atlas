@@ -70,9 +70,6 @@ class BinanceExecutionService:
                 environment="live", market=market,
                 api_key_ref=key_ref, api_secret_ref=secret_ref,
                 live_confirmed_by_user=bool(getattr(state, "live_confirmed_by_user", False)),
-                live_geo_eligible_confirmed=_flag("TITAN_LIVE_GEO_ELIGIBLE_CONFIRMED"),
-                live_kyc_confirmed=_flag("TITAN_LIVE_KYC_CONFIRMED"),
-                live_rate_limit_control_enabled=_flag("TITAN_LIVE_RATE_LIMIT_CONTROL_ENABLED"),
                 live_worker_ready=bool(live_worker_ready),
             ))
         raise ValueError("binance_execution_requires_testnet_or_live_account_target")
