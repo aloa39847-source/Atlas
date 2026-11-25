@@ -76,7 +76,8 @@ def _execution_test_db(tmp_path):
     return engine, factory()
 
 
-def test_execution_boundary_requires_explicit_live_confirmation_before_sizing(tmp_path):
+def test_execution_boundary_requires_explicit_live_confirmation_before_sizing(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
     engine, db = _execution_test_db(tmp_path)
     try:
         db.add(SystemState(
