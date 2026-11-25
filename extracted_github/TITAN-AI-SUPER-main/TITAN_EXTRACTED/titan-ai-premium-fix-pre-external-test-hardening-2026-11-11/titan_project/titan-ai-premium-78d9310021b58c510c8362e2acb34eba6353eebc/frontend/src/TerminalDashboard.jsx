@@ -482,7 +482,7 @@ export default function TerminalDashboard() {
   const balance=portfolio?.snapshot?.equity_estimate ?? portfolio?.snapshot?.balance ?? null
   const positions=portfolio?.positions||[]
   const engineItems=Array.isArray(status?.engines)?status.engines:[]
-  const enabledEngineCount=engineItems.filter(item=>['ready','healthy','active','ok'].includes(String(item.status||'').toLowerCase())).length
+  const runtimeWiredEngineCount=engineItems.filter(item=>String(item.runtime_check?.status||'').toLowerCase()==='wired').length
   const asks=(book?.asks||[]).filter(x=>Array.isArray(x)&&Number.isFinite(Number(x[0]))&&Number.isFinite(Number(x[1]))&&Number(x[0])>0&&Number(x[1])>0).sort((a,b)=>Number(a[0])-Number(b[0]))
   const bids=(book?.bids||[]).filter(x=>Array.isArray(x)&&Number.isFinite(Number(x[0]))&&Number.isFinite(Number(x[1]))&&Number(x[0])>0&&Number(x[1])>0).sort((a,b)=>Number(b[0])-Number(a[0]))
   const selectedLabel=symbol.replace('USDT','/USDT')
@@ -495,7 +495,7 @@ export default function TerminalDashboard() {
   return <main className="tt-app" dir="rtl">
     <header className="tt-header">
       <div className="tt-brand"><div className="tt-crown">♛</div><div><h1>TITAN</h1><b>SUPER AI PREMIUM</b></div><span className="tt-tagline">تحليل أعمق · قرارات أذكى · تداول أكثر أماناً</span></div>
-      <div className="tt-header-right"><Status ok={!!status}> {status?'SYSTEM CONNECTED':'API DISCONNECTED'} </Status><Status ok={streamStatus==='connected'}> BINANCE STREAM {streamStatus==='connected'?'LIVE':streamStatus.toUpperCase()} </Status><span className="tt-exchange">BINANCE {status?.state?.account_target==='live'?'LIVE BLOCKED':status?.state?.account_target==='testnet'? ( ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) ? 'TESTNET AUTO' : 'TESTNET'):'DEMO'}</span><button className="tt-icon-btn" onClick={refreshSystem} title="تحديث النظام">⟳</button>{auth.me?.authenticated&&<button className="tt-icon-btn" onClick={onLogout} title="تسجيل الخروج">خروج</button>}</div>
+      <div className="tt-header-right"><Status ok={!!status}> {status?'SYSTEM CONNECTED':'API DISCONNECTED'} </Status><Status ok={streamStatus==='connected'}> BINANCE STREAM {streamStatus==='connected'?'LIVE':streamStatus.toUpperCase()} </Status><span className="tt-exchange">BINANCE {status?.state?.account_target==='live'?(status?.state?.live_confirmed_by_user===true&&['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)?'LIVE AUTO':'LIVE READ-ONLY'):status?.state?.account_target==='testnet'? ( ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) ? 'TESTNET AUTO' : 'TESTNET'):'DEMO'}</span><button className="tt-icon-btn" onClick={refreshSystem} title="تحديث النظام">⟳</button>{auth.me?.authenticated&&<button className="tt-icon-btn" onClick={onLogout} title="تسجيل الخروج">خروج</button>}</div>
     </header>
 
     <nav className="tt-nav">{NAV.map(([id,label,icon])=><button key={id} className={tab===id?'selected':''} onClick={()=>navClick(id)}><span>{icon}</span>{label}</button>)}</nav>
@@ -521,7 +521,7 @@ export default function TerminalDashboard() {
       </Panel>
       <Panel title="TITAN AI ANALYST" className="tt-ai">
         <div className="tt-ai-orb">✧</div><Status ok={!!analysisReady(status)}> {analysisReady(status)?'اتصال النظام متاح':'بانتظار بيانات النظام'} </Status>
-        <div className="tt-ai-line"><span>محركات بحالة جاهزة</span><b>{enabledEngineCount}/{engineItems.length}</b></div>
+        <div className="tt-ai-line"><span>عقود ربط المحركات المتحققة</span><b>{runtimeWiredEngineCount}/{engineItems.length}</b></div>
         <div className="tt-ai-line"><span>حالة التشغيل</span><b>{status?.state?.bot_run_state||'غير معروف'}</b></div>
         <div className="tt-ai-line"><span>آخر قرار محفوظ</span><b>{latestDecision?.action||'لا يوجد سجل قرار'}</b></div>
         <div className="tt-ai-line"><span>رمز القرار</span><b>{latestDecision?.symbol||'—'}</b></div>
@@ -588,7 +588,7 @@ export default function TerminalDashboard() {
       </div>
     </Panel>
     <Panel title="حالة المحركات الفعلية">
-      {engineItems.length?engineItems.map(engine=><div className="tt-ai-line" key={engine.key}><span>{engine.name||engine.key}</span><b>{engine.status||'غير محدد'}</b></div>):<p className="tt-muted">لم يرجع الخادم سجلاً لحالة المحركات.</p>}
+      {engineItems.length?engineItems.map(engine=><div className="tt-ai-line" key={engine.key}><span>{engine.name||engine.key}<small>{engine.integration?.mode||'غير مصنف'}</small></span><b>{engine.status||'غير محدد'} · {engine.runtime_check?.status==='wired'?'الربط سليم':engine.runtime_check?.status||'غير مفحوص'}</b></div>):<p className="tt-muted">لم يرجع الخادم سجلاً لحالة المحركات.</p>}<p className="tt-muted">فحص الربط يتحقق من وجود الدوال المطلوبة؛ ولا يثبت وحده اتصال البورصة أو مزود خارجي.</p>
     </Panel>
     <Panel title="مزودو الذكاء الاصطناعي">
       {aiProviderState?.items?.length?aiProviderState.items.map(provider=><div className="tt-provider-row" key={provider.id}>
