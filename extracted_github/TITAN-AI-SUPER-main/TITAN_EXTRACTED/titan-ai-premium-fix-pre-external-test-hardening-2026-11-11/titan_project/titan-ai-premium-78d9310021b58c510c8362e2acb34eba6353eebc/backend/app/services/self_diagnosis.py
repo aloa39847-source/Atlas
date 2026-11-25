@@ -158,7 +158,7 @@ class SelfDiagnosisEngine:
                 return {
                     "status": "warning",
                     "detail": "Local advisory runtime is ready, but no enabled cloud analysis advisors are configured.",
-                    "primary_provider": "local",
+                    "primary_provider": None,
                     "cloud_advisor_count": 0,
                     "connection_tested_count": 0,
                     "local_fallback_connected": True,
