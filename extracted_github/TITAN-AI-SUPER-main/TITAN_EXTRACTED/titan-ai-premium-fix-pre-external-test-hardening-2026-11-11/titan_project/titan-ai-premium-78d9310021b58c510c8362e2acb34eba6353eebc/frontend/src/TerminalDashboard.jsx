@@ -15,6 +15,8 @@ const PAIRS = ['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','DOGEUSDT']
 const FRAMES = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w','1M']
 const NAV = [
   ['home','الرئيسية','⌂'],['trade','التداول','▥'],['scanner','الماسح الذكي','⌕'],
+  ['microstructure','بنية السوق','⌁'],['arbitrage','المراجحة','⇄'],
+  ['fundamentals','التحليل الأساسي','◉'],['calendar','الأجندة الاقتصادية','◷'],
   ['ai','التحليل الذكي','✧'],['strategies','الاستراتيجيات','◈'],['risk','المخاطر','⬡'],
   ['portfolio','المحفظة','▣'],['reports','التقارير','▤'],['settings','الإعدادات','⚙']
 ]
@@ -580,6 +582,10 @@ export default function TerminalDashboard() {
     </div>}
 
     {tab==='scanner'&&<SmartScanner market={market} balance={balance??150} maxLeverage={3}/>}
+    {tab==='microstructure'&&<MarketMicrostructurePanel/>}
+    {tab==='arbitrage'&&<ArbitragePanel/>}
+    {tab==='fundamentals'&&<FundamentalsPanel/>}
+    {tab==='calendar'&&<EconomicCalendarPanel/>}
     {tab==='ai'&&<div className="tt-feature-grid"><Panel title="محادثة TITAN AI">
       <div className="tt-chat">{chat.map((m,i)=><p key={i}><b>{m.role==='user'?'أنت':'TITAN'}:</b> {m.text}</p>)}</div>
       <form onSubmit={sendChat} className="tt-chat-form"><input value={chatInput} onChange={e=>setChatInput(e.target.value)} placeholder="اسأل TITAN عن السوق أو قراراته أو تقاريره..." /><button className="tt-primary">إرسال</button></form>
@@ -600,7 +606,7 @@ export default function TerminalDashboard() {
     {tab==='strategies'&&<div className="tt-feature-grid"><BacktestPanel/><MLResearchPanel/></div>}
     {tab==='risk'&&<div className="tt-feature-grid"><Panel title="حالة الحماية وإدارة المخاطر"><pre>{JSON.stringify({state:status?.state,integrations:status?.integrations},null,2)}</pre><button className="tt-primary" onClick={()=>master('start')} disabled={busy || (selectedTarget==='live' && (!liveApproval || status?.integrations?.binance?.server_live_enabled!==true)) || (['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) && !(selectedTarget==='live' && status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button><button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button><button className="tt-danger" onClick={()=>master('emergency')} disabled={busy}>إيقاف الطوارئ</button></Panel><Panel title="التشخيص الذاتي"><button className="tt-primary" onClick={runDiagnosis} disabled={busy}>تشغيل التشخيص</button>{diagnosis&&<pre>{JSON.stringify(diagnosis,null,2)}</pre>}</Panel></div>}
     {tab==='portfolio'&&<div className="tt-feature-grid"><Panel title="المحفظة الداخلية"><h2>{balance===null?'—':fmt(balance)+' USDT'}</h2><button className="tt-secondary" onClick={refreshSystem}>تحديث</button><pre>{JSON.stringify(portfolio,null,2)}</pre></Panel><PerformancePanel/></div>}
-    {tab==='reports'&&<div className="tt-feature-grid"><PerformancePanel/><MarketMicrostructurePanel/></div>}
+    {tab==='reports'&&<div className="tt-feature-grid"><PerformancePanel/></div>}
     {tab==='settings'&&<div className="tt-feature-grid"><Panel title="حساب Binance والتداول">
       <label>الحساب المستهدف</label><select value={selectedTarget} onChange={e=>{setSelectedTarget(e.target.value);setLiveApproval(false)}} disabled={['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}><option value="demo">Demo داخلي (Shadow)</option><option value="testnet">Binance Demo / Testnet (تداول آلي تجريبي)</option><option value="live">Binance Live (البدء بموافقتك فقط)</option></select>
       <label>السوق</label><select value={market} onChange={e=>setMarket(e.target.value)} disabled={['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}><option value="spot">Spot</option><option value="futures">USD-M Futures</option></select>
