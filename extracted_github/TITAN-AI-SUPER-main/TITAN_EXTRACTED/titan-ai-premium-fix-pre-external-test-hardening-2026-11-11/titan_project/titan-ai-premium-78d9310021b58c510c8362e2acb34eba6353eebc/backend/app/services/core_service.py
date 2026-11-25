@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib
 import math
 from typing import Any
 
@@ -80,6 +81,94 @@ ENGINE_INTEGRATION_MAP = {
     "prediction_tracking": {"mode": "post_prediction_lifecycle", "integration": "PredictionTrackerService evaluation of matured predictions", "decision_evidence": False, "authority": "evaluation_only"},
     "system_monitoring": {"mode": "monitoring", "integration": "System health, engine registry and operational diagnostics endpoints", "decision_evidence": False, "authority": "monitoring_only"},
 }
+
+# Import/callable contracts for every registered engine. These checks verify
+# that the declared adapter exists and is callable; they do not claim that an
+# external exchange, provider, or data feed is currently connected.
+ENGINE_RUNTIME_CONTRACTS = {
+    "compliance_policy": ["app.engines.compliance:compliance_engine.check_order_action"],
+    "market_analysis": [
+        "app.engines.market_data:MarketDataEngine.get_public_multi_timeframe",
+        "app.engines.technical:TechnicalAnalysisEngine.analyze",
+        "app.engines.decision:DecisionEngine.decide",
+    ],
+    "technical_analysis": ["app.engines.technical:TechnicalAnalysisEngine.analyze"],
+    "fundamental_analysis": [
+        "app.engines.fundamental:FundamentalAnalysisEngine.fetch_and_analyze",
+        "app.engines.fundamental:FundamentalAnalysisEngine.fetch_protocol_and_analyze",
+    ],
+    "news_analysis": ["app.engines.news:NewsAnalysisEngine.fetch_and_analyze"],
+    "market_structure": ["app.engines.technical:TechnicalAnalysisEngine.analyze"],
+    "liquidity_analysis": ["app.engines.liquidity:LiquidityAnalysisEngine.fetch_and_analyze"],
+    "order_flow": ["app.engines.order_flow:OrderFlowEngine.fetch_and_analyze"],
+    "volume_analysis": ["app.engines.technical:TechnicalAnalysisEngine.analyze"],
+    "coin_discovery": ["app.services.smart_scanner:SmartScannerService.scan"],
+    "arbitrage_analysis": ["app.engines.arbitrage:ArbitrageAnalysisEngine.fetch_and_analyze"],
+    "strategy_selection": ["app.engines.strategies:evaluate_strategy_candidates"],
+    "decision_making": ["app.engines.decision:DecisionEngine.decide"],
+    "risk_management": ["app.engines.risk:RiskEngine.validate_trade"],
+    "portfolio_management": [
+        "app.services.shadow_trading:ShadowTradingService.get_portfolio",
+        "app.services.shadow_trading:ShadowTradingService.create_shadow_order",
+    ],
+    "trade_execution": [
+        "app.services.binance_execution:BinanceExecutionService.preflight",
+        "app.services.binance_execution:BinanceExecutionService.execute_order",
+    ],
+    "position_management": [
+        "app.services.binance_trading_worker:_manage_positions",
+        "app.services.position_manager:PositionRiskManager.evaluate_positions",
+    ],
+    "backtesting": ["app.engines.backtest:BacktestEngine.run"],
+    "ai_learning": ["app.learning.outcomes:build_strategy_memory_context"],
+    "self_evolution": [
+        "app.learning.persistent:PersistentStrategyLearning.create_proposal",
+        "app.learning.persistent:PersistentStrategyLearning.validate_walk_forward",
+    ],
+    "knowledge_base": [
+        "app.knowledge.base:list_concepts",
+        "app.knowledge.base:categories",
+    ],
+    "long_term_memory": ["app.learning.outcomes:build_strategy_memory_context"],
+    "performance_evaluation": ["app.services.performance_analytics:PerformanceAnalyticsService.evaluate"],
+    "prediction_tracking": ["app.services.prediction_tracker:PredictionTrackerService.evaluate_matured"],
+    "system_monitoring": ["app.services.self_diagnosis:SelfDiagnosisEngine.run_full_check"],
+}
+
+
+def inspect_engine_runtime_contract(engine_key: str) -> dict[str, Any]:
+    """Resolve an engine's declared import/callable contract without side effects."""
+    contracts = ENGINE_RUNTIME_CONTRACTS.get(engine_key)
+    if not contracts:
+        return {
+            "status": "unmapped",
+            "checks": [],
+            "scope": "import_and_callable_only",
+            "note": "No runtime contract is declared for this registered engine.",
+        }
+    checks = []
+    for contract in contracts:
+        module_name, symbol_path = contract.split(":", 1)
+        try:
+            target: Any = importlib.import_module(module_name)
+            for part in symbol_path.split("."):
+                target = getattr(target, part)
+            ok = callable(target)
+            checks.append({"contract": contract, "ok": ok,
+                           **({} if ok else {"error": "target_not_callable"})})
+        except Exception as exc:
+            checks.append({"contract": contract, "ok": False,
+                           "error": type(exc).__name__})
+    passed = sum(1 for item in checks if item["ok"])
+    return {
+        "status": "wired" if passed == len(checks) else "broken",
+        "checks": checks,
+        "passed": passed,
+        "total": len(checks),
+        "scope": "import_and_callable_only",
+        "note": "Callable contract only; live credentials, external connectivity, and end-to-end behavior require separate tests.",
+    }
+
 
 
 def _utcnow():
@@ -439,7 +528,7 @@ class TitanCoreService:
     def engines(self, db: Session) -> list[dict[str, Any]]:
         self._state(db)
         rows = db.execute(select(EngineState).order_by(EngineState.engine_key)).scalars().all()
-        return [{"key": r.engine_key, "name": r.name, "status": r.status, "message": r.message, "updated_at": r.updated_at.isoformat() if r.updated_at else None} for r in rows]
+        return [{"key": r.engine_key, "name": r.name, "status": r.status, "message": r.message, "runtime_check": inspect_engine_runtime_contract(r.engine_key), "integration": ENGINE_INTEGRATION_MAP.get(r.engine_key, {"mode": "unmapped", "integration": "No verified runtime integration mapping", "decision_evidence": False, "authority": "none"}), "updated_at": r.updated_at.isoformat() if r.updated_at else None} for r in rows]
 
     def strategies(self) -> list[dict[str, Any]]:
         return list_strategies()
@@ -677,6 +766,7 @@ class TitanCoreService:
                 ),
                 "details": {
                     **(r.details or {}),
+                    "runtime_check": inspect_engine_runtime_contract(r.engine_key),
                     "lifecycle_control": "managed_by_trading_supervisor" if r.engine_key == "trade_execution" else "not_implemented",
                     "integration": ENGINE_INTEGRATION_MAP.get(r.engine_key, {
                         "mode": "unmapped", "integration": "No verified runtime integration mapping",
