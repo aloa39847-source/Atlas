@@ -199,10 +199,12 @@ class BinanceExecutionService:
         environment = target
         if target not in {"testnet", "live"}:
             return {"ok": False, "sent_to_exchange": False, "error": "external_execution_requires_binance_account"}
-        if target == "live" and (
-            not settings.live_trading_enabled or not bool(getattr(state, "live_confirmed_by_user", False))
-        ):
-            return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
+        if target == "live" and not settings.live_trading_enabled:
+            return {"ok": False, "sent_to_exchange": False,
+                    "error": "live_trading_disabled_by_server_configuration"}
+        if target == "live" and not bool(getattr(state, "live_confirmed_by_user", False)):
+            return {"ok": False, "sent_to_exchange": False,
+                    "error": "live_requires_explicit_user_confirmation"}
         if not isinstance(idempotency_key, str) or len(idempotency_key.strip()) < 8:
             return {"ok": False, "sent_to_exchange": False, "error": "valid_idempotency_key_required"}
         # Idempotency lookup must precede worker/emergency-stop gates: a replay
