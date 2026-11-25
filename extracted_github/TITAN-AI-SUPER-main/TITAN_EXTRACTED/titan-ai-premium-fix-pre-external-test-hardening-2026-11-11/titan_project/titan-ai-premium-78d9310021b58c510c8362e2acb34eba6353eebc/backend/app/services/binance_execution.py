@@ -87,10 +87,6 @@ class BinanceExecutionService:
         if bool(state.emergency_stop) and not allow_emergency_exit:
             return {"ok": False, "ready": False, "error": "emergency_stop_active"}
         target = str(getattr(state, "account_target", "demo") or "demo").lower()
-        if target == "live" and not settings.live_trading_enabled:
-            return {"ok": False, "ready": False,
-                    "error": "live_trading_disabled_by_server_configuration",
-                    "orders_submitted": False}
         record = None
         try:
             adapter = self.adapter_for(state, live_worker_ready=live_worker_ready)
@@ -199,9 +195,6 @@ class BinanceExecutionService:
         environment = target
         if target not in {"testnet", "live"}:
             return {"ok": False, "sent_to_exchange": False, "error": "external_execution_requires_binance_account"}
-        if target == "live" and not settings.live_trading_enabled:
-            return {"ok": False, "sent_to_exchange": False,
-                    "error": "live_trading_disabled_by_server_configuration"}
         if target == "live" and not bool(getattr(state, "live_confirmed_by_user", False)):
             return {"ok": False, "sent_to_exchange": False,
                     "error": "live_requires_explicit_user_confirmation"}
