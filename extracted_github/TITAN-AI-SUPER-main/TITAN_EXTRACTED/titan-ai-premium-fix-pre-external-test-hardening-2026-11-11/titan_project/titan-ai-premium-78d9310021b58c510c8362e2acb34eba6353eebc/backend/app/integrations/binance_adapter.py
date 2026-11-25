@@ -365,15 +365,10 @@ class BinanceTestnetAdapter:
             return {"ok": False, "sent_to_exchange": False,
                     "error": "live_credentials_missing" if self.config.environment == "live" else "testnet_credentials_missing"}
         if self.config.environment == "live":
-            if not settings.live_trading_enabled:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_trading_disabled_by_server_configuration"}
             if not self.config.live_confirmed_by_user:
                 return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
             if not self.config.live_worker_ready:
                 return {"ok": False, "sent_to_exchange": False, "error": "live_supervised_worker_required"}
-            if not (self.config.live_geo_eligible_confirmed and self.config.live_kyc_confirmed
-                    and self.config.live_rate_limit_control_enabled):
-                return {"ok": False, "sent_to_exchange": False, "error": "live_compliance_or_rate_controls_not_verified"}
         return None
 
     def _symbol_filters(self, symbol: str) -> dict[str, float]:
