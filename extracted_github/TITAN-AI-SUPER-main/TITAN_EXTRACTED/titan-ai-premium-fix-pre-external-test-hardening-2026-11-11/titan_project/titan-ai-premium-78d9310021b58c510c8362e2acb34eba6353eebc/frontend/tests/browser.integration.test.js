@@ -151,10 +151,21 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
       await page.waitForFunction(value => window.__lastWsUrl?.includes(value.toLowerCase() + '@ticker'), pair.replace('/',''))
     }
 
-    const navLabels = ['الرئيسية', 'التداول', 'الماسح الذكي', 'التحليل الذكي', 'الاستراتيجيات', 'المخاطر', 'المحفظة', 'التقارير', 'الإعدادات']
+    const navLabels = ['الرئيسية', 'التداول', 'الماسح الذكي', 'بنية السوق', 'المراجحة', 'التحليل الأساسي', 'الأجندة الاقتصادية', 'التحليل الذكي', 'الاستراتيجيات', 'المخاطر', 'المحفظة', 'التقارير', 'الإعدادات']
     for (const label of navLabels) {
       await page.locator('.tt-nav').getByRole('button', { name: new RegExp(label) }).click()
       await page.waitForTimeout(40)
+    }
+
+    const featureChecks = [
+      ['بنية السوق', /تحليل السيولة وتدفق الصفقات/],
+      ['المراجحة', /المراجحة المثلثية/],
+      ['التحليل الأساسي', /التحليل الأساسي والاقتصاديات الرمزية/],
+      ['الأجندة الاقتصادية', /التقويم الاقتصادي الأمريكي/],
+    ]
+    for (const [label, heading] of featureChecks) {
+      await page.locator('.tt-nav').getByRole('button', { name: new RegExp(label) }).click()
+      await page.getByText(heading).waitFor()
     }
 
     await page.locator('.tt-nav').getByRole('button', { name: /التداول/ }).click()
