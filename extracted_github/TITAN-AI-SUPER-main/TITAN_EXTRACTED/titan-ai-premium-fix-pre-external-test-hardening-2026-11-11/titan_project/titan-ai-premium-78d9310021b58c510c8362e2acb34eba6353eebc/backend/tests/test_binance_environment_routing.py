@@ -253,7 +253,8 @@ def test_supervised_worker_routes_live_credentials_to_live_endpoints(monkeypatch
     assert adapter._base_url() == SPOT_LIVE_BASE
 
 
-def test_execution_service_rejects_live_without_explicit_user_confirmation():
+def test_execution_service_rejects_live_without_explicit_user_confirmation(monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
     state = SimpleNamespace(account_target="live", market_type="spot", live_confirmed_by_user=False)
     class FakeDB:
         def get(self, model, ident):
