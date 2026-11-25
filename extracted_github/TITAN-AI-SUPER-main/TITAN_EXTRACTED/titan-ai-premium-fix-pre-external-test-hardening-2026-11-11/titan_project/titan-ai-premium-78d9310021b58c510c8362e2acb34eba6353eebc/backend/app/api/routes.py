@@ -141,6 +141,8 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             configured = bool(credentials.get("configured"))
         except Exception:
             configured = False
+        live_server_enabled = bool(settings.live_trading_enabled) if target == "live" else False
+        live_user_confirmed = bool(state.get("live_confirmed_by_user")) if target == "live" else False
         binance = {
             "status": "credentials_configured_not_connected" if configured else "needs_credentials",
             "configured": configured,
@@ -148,9 +150,13 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             "market": market,
             "connection_checked": False,
             "orders_submitted": False,
+            "server_live_enabled": live_server_enabled,
+            "user_live_confirmed": live_user_confirmed,
+            "live_start_required": target == "live" and not live_user_confirmed,
+            "execution_ready": False,
             "note": (
-                "Live credentials permit read-only monitoring; real orders remain unavailable until "
-                "the user explicitly confirms Live Start and all execution checks pass."
+                "Live credentials are for read-only monitoring until Live Start is explicitly confirmed for this run; "
+                "server enablement and all execution/risk checks are also required."
                 if target == "live" else
                 "Testnet credentials are stored separately; this status request does not submit orders."
             ),
