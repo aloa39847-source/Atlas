@@ -36,14 +36,20 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r "${PROJECT_DIR}/backend/requirements.txt"
       - name: Compile backend modules
         run: python -m compileall -q "${PROJECT_DIR}/backend/app" "${PROJECT_DIR}/backend/tests"
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install --upgrade pip-audit
+          pip-audit -r "${PROJECT_DIR}/backend/requirements.txt" --format=json > backend-audit.json
       - name: Run backend test suite
         run: python -m pytest -q "${PROJECT_DIR}/backend/tests" --junitxml=backend-test-results.xml
-      - name: Upload backend test report
+      - name: Upload backend test and dependency reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-test-report-${{ github.run_id }}
-          path: backend-test-results.xml
+          name: backend-reports-${{ github.run_id }}
+          path: |
+            backend-test-results.xml
+            backend-audit.json
           if-no-files-found: ignore
 
   frontend:
