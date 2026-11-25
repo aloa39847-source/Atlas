@@ -3062,9 +3062,6 @@ def _get_binance_live_adapter(market: str = None, db=None):
         enabled=bool(key_ref and secret_ref), environment="live", market=mkt,
         api_key_ref=key_ref, api_secret_ref=secret_ref,
         live_confirmed_by_user=confirmed,
-        live_geo_eligible_confirmed=os.getenv("TITAN_LIVE_GEO_ELIGIBLE_CONFIRMED", "false").strip().lower() in {"1", "true", "yes", "on"},
-        live_kyc_confirmed=os.getenv("TITAN_LIVE_KYC_CONFIRMED", "false").strip().lower() in {"1", "true", "yes", "on"},
-        live_rate_limit_control_enabled=os.getenv("TITAN_LIVE_RATE_LIMIT_CONTROL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
         live_worker_ready=False,
     ))
 
