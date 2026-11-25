@@ -59,7 +59,7 @@ jobs:
           cache-dependency-path: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/frontend/package-lock.json
       - name: Install frontend dependencies
         working-directory: ${{ env.PROJECT_DIR }}/frontend
-        run: npm install --no-audit
+        run: npm ci
       - name: Build frontend (same-origin API)
         working-directory: ${{ env.PROJECT_DIR }}/frontend
         run: npm run build
