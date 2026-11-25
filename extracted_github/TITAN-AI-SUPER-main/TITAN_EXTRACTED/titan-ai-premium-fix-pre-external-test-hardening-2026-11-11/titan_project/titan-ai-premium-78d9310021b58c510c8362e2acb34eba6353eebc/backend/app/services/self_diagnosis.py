@@ -98,44 +98,78 @@ class SelfDiagnosisEngine:
 
             snapshot = provider_status(db)
             providers = snapshot.get("providers") or []
-            openai_rows = [
-                item for item in providers
-                if (item.get("provider") or "").lower() == "openai" and item.get("enabled")
-            ]
-            # Match evaluator selection exactly: the lowest-priority enabled
-            # OpenAI row is the primary; a tested secondary must not mask it.
-            primary = openai_rows[0] if openai_rows else None
-            openai_ready = bool(primary and primary.get("ready"))
-            openai_tested = bool(primary and primary.get("last_test_success") is True)
-            local = local_model_status()
+            analysis_providers = []
+            for item in providers:
+                if not item.get("enabled"):
+                    continue
+                tasks = item.get("tasks") or []
+                if tasks and not {str(task).strip().lower() for task in tasks}.intersection(
+                    {"analysis", "decision", "trading_analysis"}
+                ):
+                    continue
+                analysis_providers.append(item)
 
-            if openai_ready and openai_tested:
-                fallback = "local fallback connected" if local.get("connected") else "local fallback unavailable"
+            local = local_model_status()
+            local_ready = bool(
+                local.get("enabled") is True
+                and local.get("connected") is True
+                and local.get("model_available") is True
+            )
+            primary = analysis_providers[0] if analysis_providers else None
+            primary_name = (primary.get("provider") or "").lower() if primary else None
+            untested = [
+                item for item in analysis_providers
+                if not item.get("ready") or item.get("last_test_success") is not True
+            ]
+            tested_count = len(analysis_providers) - len(untested)
+
+            if analysis_providers and not untested:
                 return {
                     "status": "ok",
-                    "detail": f"OpenAI primary key configured and connection-tested; {fallback}.",
-                    "primary_provider": "openai",
-                    "local_fallback_connected": bool(local.get("connected")),
+                    "detail": (
+                        f"All {tested_count} enabled cloud analysis advisors are key-ready and connection-tested; "
+                        f"primary by configured priority: {primary_name}; "
+                        f"local fallback {'ready' if local_ready else 'not ready'}."
+                    ),
+                    "primary_provider": primary_name,
+                    "cloud_advisor_count": len(analysis_providers),
+                    "connection_tested_count": tested_count,
+                    "local_fallback_connected": local_ready,
                 }
-            if openai_ready:
+            if analysis_providers:
+                first_ready = bool(primary and primary.get("ready"))
+                first_tested = bool(primary and primary.get("last_test_success") is True)
                 return {
                     "status": "warning",
-                    "detail": "OpenAI primary key is configured but a successful provider connection test has not been recorded.",
-                    "primary_provider": "openai",
-                    "local_fallback_connected": bool(local.get("connected")),
+                    "detail": (
+                        f"{tested_count}/{len(analysis_providers)} enabled analysis advisors passed connection tests; "
+                        f"priority primary {primary_name} "
+                        f"({'tested' if first_ready and first_tested else 'not successfully tested'})."
+                    ),
+                    "primary_provider": primary_name,
+                    "cloud_advisor_count": len(analysis_providers),
+                    "connection_tested_count": tested_count,
+                    "untested_providers": [
+                        (item.get("provider") or "unknown") for item in untested
+                    ],
+                    "local_fallback_connected": local_ready,
                 }
-            if local.get("connected") and local.get("model_available"):
+            if local_ready:
                 return {
                     "status": "warning",
-                    "detail": "OpenAI primary is not ready; the local loopback fallback is available as fallback-only.",
-                    "primary_provider": None,
+                    "detail": "Local advisory runtime is ready, but no enabled cloud analysis advisors are configured.",
+                    "primary_provider": "local",
+                    "cloud_advisor_count": 0,
+                    "connection_tested_count": 0,
                     "local_fallback_connected": True,
                 }
             return {
                 "status": "warning",
-                "detail": "OpenAI primary is not configured and the local fallback is not confirmed ready.",
+                "detail": "No enabled, connection-tested cloud analysis advisors or ready local model are available.",
                 "primary_provider": None,
-                "local_fallback_connected": bool(local.get("connected")),
+                "cloud_advisor_count": 0,
+                "connection_tested_count": 0,
+                "local_fallback_connected": False,
                 "configured_provider_count": len(providers),
             }
         except Exception as e:
@@ -165,20 +199,55 @@ class SelfDiagnosisEngine:
                 engs = core_service.engines(db2)
             finally:
                 db2.close()
-            counts: dict[str, int] = {}
-            incomplete: list[str] = []
+            maturity_counts: dict[str, int] = {}
+            runtime_counts: dict[str, int] = {}
+            broken_runtime: list[str] = []
+            unmapped_integration: list[str] = []
             for engine in engs:
-                status = str(engine.get("status", "unknown")).lower()
-                counts[status] = counts.get(status, 0) + 1
-                if status != "ready":
-                    incomplete.append(f"{engine.get('key', 'unknown')}:{status}")
-            if incomplete:
-                detail = (
-                    f"{len(engs)} registered; {counts.get('ready', 0)} ready; "
-                    f"{len(incomplete)} not verified ready: " + ", ".join(incomplete[:12])
-                )
-                return {"status": "warning", "detail": detail, "status_counts": counts}
-            return {"status": "ok", "detail": f"{len(engs)} engines report ready", "status_counts": counts}
+                maturity = str(engine.get("status", "unknown")).lower()
+                maturity_counts[maturity] = maturity_counts.get(maturity, 0) + 1
+                runtime = engine.get("runtime_check") or {}
+                runtime_status = str(runtime.get("status", "not_checked")).lower()
+                runtime_counts[runtime_status] = runtime_counts.get(runtime_status, 0) + 1
+                if runtime_status != "wired":
+                    broken_runtime.append(f"{engine.get('key', 'unknown')}:{runtime_status}")
+                integration = engine.get("integration") or {}
+                if integration.get("mode") in {None, "unmapped"}:
+                    unmapped_integration.append(str(engine.get("key", "unknown")))
+
+            if not engs:
+                return {"status": "error", "detail": "No registered engines were found."}
+            if broken_runtime or unmapped_integration:
+                return {
+                    "status": "error",
+                    "detail": (
+                        f"{len(broken_runtime)} engine runtime contracts are broken or missing; "
+                        f"{len(unmapped_integration)} engines have no integration mapping."
+                    ),
+                    "maturity_counts": maturity_counts,
+                    "runtime_counts": runtime_counts,
+                    "broken_runtime": broken_runtime[:20],
+                    "unmapped_integration": unmapped_integration[:20],
+                }
+
+            partial_count = sum(
+                count for status, count in maturity_counts.items() if status != "ready"
+            )
+            detail = (
+                f"{len(engs)} registered engines; all {runtime_counts.get('wired', 0)} "
+                "runtime import/callable contracts resolve and all integration modes are mapped. "
+                f"Implementation maturity remains partial/not-ready for {partial_count} engines. "
+                "This check does not prove external connectivity or end-to-end behavior."
+            )
+            return {
+                "status": "warning" if partial_count else "ok",
+                "detail": detail,
+                "maturity_counts": maturity_counts,
+                "runtime_counts": runtime_counts,
+                "runtime_wired_count": runtime_counts.get("wired", 0),
+                "integration_mapped_count": len(engs) - len(unmapped_integration),
+                "verification_scope": "import_and_callable_only",
+            }
         except Exception as e:
             return {"status": "error", "detail": str(e)}
 
