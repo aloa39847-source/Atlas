@@ -10,6 +10,8 @@ import FundamentalsPanel from './FundamentalsPanel'
 import EconomicCalendarPanel from './EconomicCalendarPanel'
 import MLResearchPanel from './MLResearchPanel'
 import TelegramPanel from './TelegramPanel'
+import RiskSimulationPanel from './RiskSimulationPanel'
+import FuturesOrderbookHistoryPanel from './FuturesOrderbookHistoryPanel'
 
 const PAIRS = ['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','DOGEUSDT']
 const FRAMES = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w','1M']
@@ -603,8 +605,8 @@ export default function TerminalDashboard() {
       </div>):<p className="tt-muted">لا توجد إعدادات مزود خارجي محفوظة. لن تظهر حالة مزود غير مهيأ على أنه متصل.</p>}
     </Panel>
     </div>}
-    {tab==='strategies'&&<div className="tt-feature-grid"><BacktestPanel/><MLResearchPanel/></div>}
-    {tab==='risk'&&<div className="tt-feature-grid"><Panel title="حالة الحماية وإدارة المخاطر"><pre>{JSON.stringify({state:status?.state,integrations:status?.integrations},null,2)}</pre><button className="tt-primary" onClick={()=>master('start')} disabled={busy || (selectedTarget==='live' && (!liveApproval || status?.integrations?.binance?.server_live_enabled!==true)) || (['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) && !(selectedTarget==='live' && status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button><button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button><button className="tt-danger" onClick={()=>master('emergency')} disabled={busy}>إيقاف الطوارئ</button></Panel><Panel title="التشخيص الذاتي"><button className="tt-primary" onClick={runDiagnosis} disabled={busy}>تشغيل التشخيص</button>{diagnosis&&<pre>{JSON.stringify(diagnosis,null,2)}</pre>}</Panel></div>}
+    {tab==='strategies'&&<div className="tt-feature-grid"><BacktestPanel/><MLResearchPanel/><FuturesOrderbookHistoryPanel/></div>}
+    {tab==='risk'&&<div className="tt-feature-grid"><Panel title="حالة الحماية وإدارة المخاطر"><pre>{JSON.stringify({state:status?.state,integrations:status?.integrations},null,2)}</pre><button className="tt-primary" onClick={()=>master('start')} disabled={busy || (selectedTarget==='live' && (!liveApproval || status?.integrations?.binance?.server_live_enabled!==true)) || (['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) && !(selectedTarget==='live' && status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button><button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button><button className="tt-danger" onClick={()=>master('emergency')} disabled={busy}>إيقاف الطوارئ</button></Panel><Panel title="التشخيص الذاتي"><button className="tt-primary" onClick={runDiagnosis} disabled={busy}>تشغيل التشخيص</button>{diagnosis&&<pre>{JSON.stringify(diagnosis,null,2)}</pre>}</Panel><RiskSimulationPanel/></div>}
     {tab==='portfolio'&&<div className="tt-feature-grid"><Panel title="المحفظة الداخلية"><h2>{balance===null?'—':fmt(balance)+' USDT'}</h2><button className="tt-secondary" onClick={refreshSystem}>تحديث</button><pre>{JSON.stringify(portfolio,null,2)}</pre></Panel><PerformancePanel/></div>}
     {tab==='reports'&&<div className="tt-feature-grid"><PerformancePanel/></div>}
     {tab==='settings'&&<div className="tt-feature-grid"><Panel title="حساب Binance والتداول">
