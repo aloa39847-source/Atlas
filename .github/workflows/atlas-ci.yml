@@ -1,10 +1,6 @@
 name: ATLAS Autonomous Trader CI
 
 on:
-  push:
-    branches:
-      - main
-      - "atlas/**"
   pull_request:
     branches:
       - main
@@ -14,39 +10,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: atlas-ci-${{ github.workflow }}-${{ github.ref }}
+  group: atlas-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
   PROJECT_DIR: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
 
 jobs:
-  sync-frontend-lockfile:
-    name: Refresh frontend lockfile on development branch
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/atlas/')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-      - name: Regenerate deterministic npm lockfile
-        working-directory: ${{ env.PROJECT_DIR }}/frontend
-        run: npm install --package-lock-only --ignore-scripts --no-audit
-      - name: Commit lockfile update when changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "${PROJECT_DIR}/frontend/package-lock.json"
-          if git diff --cached --quiet; then
-            echo "Frontend lockfile already synchronized."
-            exit 0
-          fi
-          git commit -m "Refresh frontend lockfile for patched Vite toolchain"
-          git push origin "HEAD:${GITHUB_REF#refs/heads/}"
-
   backend:
     name: Backend compile and tests
     runs-on: ubuntu-latest
