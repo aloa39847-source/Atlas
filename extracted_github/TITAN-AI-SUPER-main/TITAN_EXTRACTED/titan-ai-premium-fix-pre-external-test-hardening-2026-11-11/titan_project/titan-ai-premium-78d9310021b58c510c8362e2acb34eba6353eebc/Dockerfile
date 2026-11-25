@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Production API + same-origin frontend.
-FROM python:3.11-slim
+FROM python:3.12-slim
 WORKDIR /app
 RUN mkdir -p /data
 COPY backend/requirements.txt /app/requirements.txt
