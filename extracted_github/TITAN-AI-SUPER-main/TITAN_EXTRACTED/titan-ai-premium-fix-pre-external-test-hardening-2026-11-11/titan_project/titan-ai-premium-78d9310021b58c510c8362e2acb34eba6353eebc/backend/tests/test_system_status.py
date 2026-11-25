@@ -84,3 +84,42 @@ def test_system_status_keeps_unchecked_or_unconfigured_services_honest(monkeypat
     assert result["integrations"]["binance"]["account_target"] == "testnet"
     assert result["integrations"]["ai_providers"]["status"] == "not_configured"
     assert result["integrations"]["telegram"]["configured"] is False
+
+
+
+def test_live_credentials_status_reports_server_gate_and_user_confirmation(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app import star_app
+
+    class RequestStub:
+        query_params = {"market": "spot"}
+
+    class FakeDB:
+        closed = False
+        def close(self):
+            self.closed = True
+
+    db = FakeDB()
+    monkeypatch.setattr(star_app, "_binance_auth_error", lambda request: None)
+    monkeypatch.setattr(star_app, "load_binance_credentials", lambda environment, market: {
+        "configured": True, "api_key": "NEVER_RETURN_KEY", "api_secret": "NEVER_RETURN_SECRET",
+    })
+    monkeypatch.setattr(star_app, "db_sess", lambda: db)
+    monkeypatch.setattr(star_app.core_service, "get_state", lambda session: {
+        "account_target": "live", "live_confirmed_by_user": False,
+    })
+    monkeypatch.setattr(star_app.settings, "live_trading_enabled", False)
+
+    response = asyncio.run(star_app.binance_live_creds_status(RequestStub()))
+    import json
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert payload["configured"] is True
+    assert payload["server_live_enabled"] is False
+    assert payload["user_live_confirmed"] is False
+    assert payload["live_start_required"] is True
+    assert payload["live_blocked"] is True
+    assert "NEVER_RETURN_KEY" not in response.body.decode("utf-8")
+    assert "NEVER_RETURN_SECRET" not in response.body.decode("utf-8")
+    assert db.closed is True
