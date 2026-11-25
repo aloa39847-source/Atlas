@@ -1,0 +1,42 @@
+name: TITAN Binance Futures Testnet Read-only Preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "USD-M Futures Testnet symbol"
+        required: true
+        default: "BTCUSDT"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: titan-binance-futures-testnet-preflight
+  cancel-in-progress: false
+
+jobs:
+  futures-testnet-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BINANCE_TESTNET_FUTURES_API_KEY: ${{ secrets.BINANCE_TESTNET_FUTURES_API_KEY }}
+      BINANCE_TESTNET_FUTURES_API_SECRET: ${{ secrets.BINANCE_TESTNET_FUTURES_API_SECRET }}
+      TITAN_FUTURES_TESTNET_SYMBOL: ${{ inputs.symbol }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate Futures Testnet credentials and perform read-only checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/scripts/titan_futures_testnet_readonly.py
+      - name: Confirm no order endpoints were called
+        if: always()
+        run: |
+          echo "Futures Testnet read-only preflight only."
+          echo "No order, leverage, margin-mode, transfer, or withdrawal endpoint is called."
+          echo "Production Binance endpoints and LIVE credentials are rejected."

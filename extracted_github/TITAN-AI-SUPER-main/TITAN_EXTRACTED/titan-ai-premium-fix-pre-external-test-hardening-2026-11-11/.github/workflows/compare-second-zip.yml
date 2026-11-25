@@ -1,0 +1,189 @@
+name: Compare TITAN second ZIP (read only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository without changing it
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Compare archive manifest with extracted project
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import stat
+          import zipfile
+          from pathlib import Path, PurePosixPath
+          from collections import Counter
+
+          project = Path("titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc")
+          archive = project / "8ptblr.zip"
+          report = Path("zip-comparison-report.md")
+
+          if not project.is_dir():
+              raise SystemExit(f"Extracted project directory not found: {project}")
+          if not archive.is_file():
+              raise SystemExit(f"Second ZIP not found: {archive}")
+
+          def sha256_stream(stream):
+              h = hashlib.sha256()
+              while True:
+                  chunk = stream.read(1024 * 1024)
+                  if not chunk:
+                      break
+                  h.update(chunk)
+              return h.hexdigest()
+
+          with zipfile.ZipFile(archive, "r") as zf:
+              infos = [i for i in zf.infolist() if not i.is_dir()]
+              bad_member = zf.testzip()
+              if bad_member:
+                  raise SystemExit(f"ZIP CRC check failed at: {bad_member}")
+
+              raw_names = [i.filename for i in infos]
+              duplicates = [name for name, count in Counter(raw_names).items() if count > 1]
+
+              # Strip one common wrapper directory only when every file is inside it.
+              first_parts = [PurePosixPath(n).parts for n in raw_names if PurePosixPath(n).parts]
+              common_root = None
+              if first_parts:
+                  first = first_parts[0][0]
+                  if all(parts and parts[0] == first and len(parts) > 1 for parts in first_parts):
+                      common_root = first
+
+              archive_files = {}
+              unsafe = []
+              symlinks = []
+              for info in infos:
+                  p = PurePosixPath(info.filename)
+                  if p.is_absolute() or ".." in p.parts or "\\" in info.filename:
+                      unsafe.append(info.filename)
+                      continue
+                  mode = (info.external_attr >> 16) & 0xFFFF
+                  if stat.S_ISLNK(mode):
+                      symlinks.append(info.filename)
+                      continue
+                  parts = p.parts[1:] if common_root and p.parts and p.parts[0] == common_root else p.parts
+                  rel = PurePosixPath(*parts).as_posix()
+                  if not rel or rel == ".":
+                      continue
+                  with zf.open(info, "r") as f:
+                      digest = sha256_stream(f)
+                  archive_files[rel] = {"size": info.file_size, "sha256": digest, "crc": f"{info.CRC:08x}"}
+
+          local_files = {}
+          for path in project.rglob("*"):
+              if not path.is_file() or path == archive:
+                  continue
+              rel = path.relative_to(project).as_posix()
+              with path.open("rb") as f:
+                  digest = sha256_stream(f)
+              local_files[rel] = {"size": path.stat().st_size, "sha256": digest}
+
+          a_names, l_names = set(archive_files), set(local_files)
+          only_zip = sorted(a_names - l_names)
+          only_local = sorted(l_names - a_names)
+          common = sorted(a_names & l_names)
+          same = [p for p in common if archive_files[p]["sha256"] == local_files[p]["sha256"]]
+          different = [p for p in common if archive_files[p]["sha256"] != local_files[p]["sha256"]]
+
+          # Search source/config/docs for Binance Futures Demo/Testnet support.
+          terms = ("demo-fapi.binance.com", "demo-fstream.binance.com", "testnet.binancefuture.com", "futures demo", "futures testnet", "mock trading", "demo trading", "binance demo", "FUTURES_DEMO", "FUTURES_TESTNET")
+
+          def scan_archive(zf, paths):
+              hits = []
+              for rel in paths:
+                  info = next((x for x in zf.infolist() if not x.is_dir() and x.filename.endswith(rel)), None)
+                  if info is None or info.file_size > 2_000_000:
+                      continue
+                  try:
+                      with zf.open(info) as f:
+                          content = f.read().decode("utf-8")
+                  except (UnicodeDecodeError, OSError):
+                      continue
+                  for n, line in enumerate(content.splitlines(), 1):
+                      if any(term.casefold() in line.casefold() for term in terms):
+                          hits.append((rel, n, line.strip()[:240]))
+              return hits
+
+          def scan_local(root, paths):
+              hits = []
+              for rel in paths:
+                  path = root / rel
+                  if not path.is_file() or path.stat().st_size > 2_000_000:
+                      continue
+                  try:
+                      content = path.read_text(encoding="utf-8")
+                  except (UnicodeDecodeError, OSError):
+                      continue
+                  for n, line in enumerate(content.splitlines(), 1):
+                      if any(term.casefold() in line.casefold() for term in terms):
+                          hits.append((rel, n, line.strip()[:240]))
+              return hits
+
+          with zipfile.ZipFile(archive, "r") as zf:
+              zip_demo_hits = scan_archive(zf, sorted(archive_files))
+          local_demo_hits = scan_local(project, sorted(local_files))
+
+          lines = [
+              "# تقرير مقارنة ZIP الثاني مع المشروع المستخرج",
+              "",
+              "- الفحص للقراءة فقط: لم يتم استخراج ZIP ولم يتم تعديل ملفات المشروع.",
+              f"- ملف ZIP: `{archive}`",
+              f"- حجم ZIP: {archive.stat().st_size:,} bytes",
+              f"- فحص CRC للأرشيف: {'PASS' if not bad_member else 'FAIL'}",
+              f"- مجلد الجذر المشترك الذي تم تجاهله للمقارنة: `{common_root or '(لا يوجد)'}`",
+              f"- عدد ملفات ZIP: {len(archive_files)}",
+              f"- عدد ملفات المشروع الحالية (باستثناء ZIP نفسه): {len(local_files)}",
+              f"- ملفات متطابقة بالمحتوى SHA-256: {len(same)}",
+              f"- ملفات مشتركة لكن محتواها مختلف: {len(different)}",
+              f"- موجودة في ZIP فقط: {len(only_zip)}",
+              f"- موجودة في المشروع فقط: {len(only_local)}",
+              f"- مسارات مكررة داخل ZIP: {len(duplicates)}",
+              f"- مسارات غير آمنة: {len(unsafe)}",
+              f"- روابط رمزية داخل ZIP: {len(symlinks)}",
+              "",
+              "## الملفات المختلفة في المحتوى",
+          ]
+          lines += [f"- `{p}` (ZIP {archive_files[p]['size']} bytes; current {local_files[p]['size']} bytes)" for p in different] or ["- لا يوجد"]
+          lines += ["", "## Binance Futures Demo/Testnet evidence",
+                       f"- ZIP hits: {len(zip_demo_hits)}",
+                       f"- Current extracted-project hits: {len(local_demo_hits)}",
+                       "", "### Evidence in ZIP"]
+          lines += [f"- {p}:{n} — {line}" for p, n, line in zip_demo_hits] or ["- لا توجد مطابقات نصية"]
+          lines += ["", "### Evidence in current extracted project"]
+          lines += [f"- {p}:{n} — {line}" for p, n, line in local_demo_hits] or ["- لا توجد مطابقات نصية"]
+          lines += ["", "## موجودة في ZIP فقط"]
+          lines += [f"- `{p}` ({archive_files[p]['size']} bytes)" for p in only_zip] or ["- لا يوجد"]
+          lines += ["", "## موجودة في المشروع فقط"]
+          lines += [f"- `{p}` ({local_files[p]['size']} bytes)" for p in only_local] or ["- لا يوجد"]
+          lines += ["", "## مشكلات الأرشيف"]
+          lines += [f"- مكرر: `{p}`" for p in duplicates] or ["- لا توجد مسارات مكررة"]
+          lines += [f"- غير آمن: `{p}`" for p in unsafe] or ["- لا توجد مسارات غير آمنة"]
+          lines += [f"- رابط رمزي: `{p}`" for p in symlinks] or ["- لا توجد روابط رمزية"]
+          lines += ["", "## الملفات المتطابقة"]
+          lines += [f"- `{p}`" for p in same] or ["- لا يوجد"]
+          report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("\n".join(lines[:22]))
+          print(f"Full report written to {report}")
+          PY
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-second-zip-comparison
+          path: zip-comparison-report.md
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,48 @@
+name: Local AI real-model smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Ollama model to download and test
+        required: true
+        default: qwen2.5:1.5b
+
+permissions:
+  contents: read
+
+jobs:
+  real-local-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PROJECT_DIR: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+      TITAN_LOCAL_AI_ENABLED: "true"
+      TITAN_LOCAL_AI_BASE_URL: http://127.0.0.1:11434/v1
+      TITAN_LOCAL_AI_MODEL: ${{ inputs.model }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: python -m pip install -r "$PROJECT_DIR/backend/requirements.txt"
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+          sh /tmp/ollama-install.sh
+      - name: Start loopback-only Ollama
+        run: |
+          OLLAMA_HOST=127.0.0.1:11434 nohup ollama serve >/tmp/ollama.log 2>&1 </dev/null &
+          for i in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:11434/api/tags >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/ollama.log
+          exit 1
+      - name: Download actual model weights
+        run: ollama pull "$TITAN_LOCAL_AI_MODEL"
+      - name: Run offline provider failover against real local model
+        env:
+          PYTHONPATH: ${{ github.workspace }}/${{ env.PROJECT_DIR }}/backend
+        run: python "$PROJECT_DIR/scripts/smoke_local_ai_runtime.py"

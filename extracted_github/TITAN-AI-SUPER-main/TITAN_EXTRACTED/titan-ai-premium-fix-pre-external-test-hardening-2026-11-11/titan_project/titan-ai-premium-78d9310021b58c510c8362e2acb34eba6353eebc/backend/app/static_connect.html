@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>TITAN - ربط Binance Testnet</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b1220;color:#e6edf3;margin:0;padding:16px}
+.card{background:#121c2f;border:1px solid #22314f;border-radius:12px;padding:14px;margin-bottom:12px}
+input,select,button{width:100%;padding:12px;margin:6px 0;border-radius:10px;border:1px solid #334;font-size:16px;box-sizing:border-box}
+button{background:#2563eb;color:#fff;cursor:pointer;border:none}
+button.sec{background:#334155}
+.pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#1f2937}
+.ok{background:#14532d}.warn{background:#78350f}.err{background:#7f1d1d}
+.muted{color:#94a3b8;font-size:14px}
+#dlmsg{margin-top:8px;padding:10px;border-radius:8px;display:none}
+</style>
+</head>
+<body>
+<h2>TITAN SUPER AI PREMIUM - ربط Binance Testnet</h2>
+
+<div class="card">
+<h3>تصدير المشروع (ZIP)</h3>
+<div class="muted">تنزيل آخر نسخة كاملة (بدون أسرار/قواعد بيانات حساسة). لا يحتاج ربط Binance.</div>
+<button onclick="downloadZip()">تنزيل وحفظ ZIP</button>
+<button class="sec" onclick="shareZip()">مشاركة ZIP (Android Share)</button>
+<a id="directLink" href="/download" style="display:block;margin-top:8px"><button type="button" class="sec">رابط تنزيل مباشر</button></a>
+<div id="dlmsg"></div>
+</div>
+
+<div class="card">
+<div>الحالة: <span id="status" class="pill warn">غير متصل</span></div>
+<div>السوق: <span id="market" class="pill">-</span></div>
+<div>Base URL: <span id="base" class="muted">-</span></div>
+<div id="msg" class="muted" style="margin-top:8px"></div>
+</div>
+<div class="card">
+<label>نوع السوق</label>
+<select id="mkt"><option value="spot">Spot Testnet</option><option value="futures">USD-M Futures Testnet</option></select>
+<label>Binance Testnet API Key</label>
+<input id="key" placeholder="المفتاح التجريبي" autocomplete="off"/>
+<label>Binance Testnet API Secret</label>
+<input id="secret" type="password" placeholder="السر التجريبي" autocomplete="off"/>
+<button onclick="save()">تحقق وحفظ وبدء التداول تلقائياً</button>
+<button class="sec" onclick="test()">اختبار الاتصال</button>
+<button class="sec" onclick="del()">حذف المفاتيح</button>
+<div class="muted" style="margin-top:8px">المفاتيح تُحفظ مشفرة على الخادم فقط. لا تشاركها في المحادثة.</div>
+</div>
+<div class="card">
+<h3>مرحلة الاختبار الحالية</h3>
+<div class="muted">بعد نجاح التحقق من مفاتيح السوق المحدد وحفظها بأمان، يبدأ TITAN عامل التداول الآلي تلقائياً على Testnet. يشمل ذلك Spot وUSD-M Futures. إذا لم تنجح فحوص الجاهزية أو الحماية فلن يبدأ العامل، وستظهر لك نتيجة الفشل. Live غير مخصص لهذه الصفحة.</div>
+</div>
+<script>
+function showDl(msg, type){const el=document.getElementById('dlmsg');el.style.display='block';el.className='';el.style.background=type==='ok'?'#14532d':(type==='err'?'#7f1d1d':'#1f2937');el.textContent=msg;}
+async function downloadZip(){
+  showDl('جارٍ تجهيز الملف...','info');
+  try{
+    const r=await fetch('/download');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download='TITAN_SUPER_AI_PREMIUM_COMPLETE.zip';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    showDl('تم بدء التنزيل. إذا لم يظهر، استخدم "رابط تنزيل مباشر" أو "مشاركة ZIP". الملف: TITAN_SUPER_AI_PREMIUM_COMPLETE.zip','ok');
+  }catch(e){ showDl('فشل التنزيل: '+e.message+' - جرّب "رابط تنزيل مباشر" أو "مشاركة ZIP"','err'); }
+}
+async function shareZip(){
+  showDl('جارٍ تجهيز الملف للمشاركة...','info');
+  try{
+    const r=await fetch('/download');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const blob=await r.blob();
+    const file=new File([blob],'TITAN_SUPER_AI_PREMIUM_COMPLETE.zip',{type:'application/zip'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:'TITAN SUPER AI PREMIUM', text:'TITAN_SUPER_AI_PREMIUM_COMPLETE.zip'});
+      showDl('تمت المشاركة بنجاح. احفظ الملف من التطبيق الذي اخترته.','ok');
+    } else if(navigator.share){
+      // fallback: share link (limited on localhost)
+      await navigator.share({title:'TITAN ZIP', url:location.origin+'/download'});
+      showDl('تمت مشاركة الرابط. قد تحتاج فتحه في متصفح يدعم التنزيل.','ok');
+    } else {
+      showDl('المشاركة غير مدعومة في هذا المتصفح. استخدم "رابط تنزيل مباشر".','err');
+    }
+  }catch(e){ showDl('فشل/أُلغي: '+e.message,'err'); }
+}
+async function api(path,opts={}){const token=localStorage.getItem('titan_token')||'';const headers={'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(opts.headers||{})};const r=await fetch(path,{...opts,headers});const raw=await r.text();let data={};try{data=raw?JSON.parse(raw):{}}catch{data={error:raw}}if(r.status===401)throw new Error('انتهت جلسة الدخول أو لم تسجل الدخول. افتح TITAN وسجّل الدخول ثم أعد المحاولة.');if(!r.ok)throw new Error(data.detail||data.error||('HTTP '+r.status));return data}
+async function refresh(){try{const s=await api('/api/binance/testnet/status?market='+document.getElementById('mkt').value);document.getElementById('status').textContent=s.connected?'متصل':'غير متصل';document.getElementById('status').className='pill '+(s.connected?'ok':'warn');document.getElementById('market').textContent=s.market||'-';document.getElementById('base').textContent=s.base_url||'-';}catch(e){document.getElementById('msg').textContent=e.message}}
+async function save(){const m=document.getElementById('mkt').value;const k=document.getElementById('key').value;const s=document.getElementById('secret').value;try{const r=await api('/api/binance/testnet/save',{method:'POST',body:JSON.stringify({api_key:k,api_secret:s,market:m})});const workerError=r.worker?.error||r.error||'';document.getElementById('msg').textContent=r.ok&&r.saved&&r.auto_started?'تم ربط '+m.toUpperCase()+' Testnet بنجاح وبدأ TITAN التداول الآلي.':r.ok&&r.saved?'تم حفظ مفاتيح '+m.toUpperCase()+' Testnet، لكن العامل لم يبدأ: '+(workerError||r.note||'فشل فحص الجاهزية'):'فشل ربط '+m.toUpperCase()+' Testnet: '+(r.error||'تعذر التحقق من المفاتيح');}catch(e){document.getElementById('msg').textContent='فشل الربط: '+e.message;}finally{document.getElementById('key').value='';document.getElementById('secret').value='';refresh()}}
+async function test(){try{const r=await api('/api/binance/testnet/status?market='+document.getElementById('mkt').value);document.getElementById('msg').textContent=r.connected?'الاتصال ناجح':'غير متصل - تحقق من مفاتيح Spot Testnet';}catch(e){document.getElementById('msg').textContent=e.message;}refresh()}
+async function del(){if(!confirm('حذف مفاتيح Testnet المحفوظة؟'))return;try{await api('/api/binance/testnet/delete',{method:'POST'});document.getElementById('msg').textContent='تم حذف المفاتيح التجريبية.';}catch(e){document.getElementById('msg').textContent=e.message;}refresh()}
+async function startBot(){const r=await api('/api/master/start',{method:'POST',body:JSON.stringify({account_target:'testnet'})});document.getElementById('msg').textContent=r.ok?'تم بدء التشغيل':'خطأ: '+(r.detail||r.error||JSON.stringify(r))}
+async function stopBot(){const r=await api('/api/master/stop',{method:'POST',body:JSON.stringify({reason:'user_stop'})});document.getElementById('msg').textContent=r.ok?'تم الإيقاف':'خطأ'}
+refresh();
+</script>
+</body>
+</html>

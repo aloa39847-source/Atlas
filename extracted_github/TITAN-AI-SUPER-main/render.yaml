@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: titan-ai-premium
+    runtime: docker
+    rootDir: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+    plan: free
+    autoDeployTrigger: checksPass
+    dockerfilePath: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/Dockerfile
+    dockerContext: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+    healthCheckPath: /api/health
+    envVars:
+      - key: TITAN_APP_ENV
+        value: production
+      - key: TITAN_AUTH_REQUIRED
+        value: "true"
+      - key: TITAN_SECRET_KEY
+        sync: false
+      - key: TITAN_ALLOWED_EMAILS
+        sync: false
+      - key: TITAN_LIVE_TRADING_ENABLED
+        value: "false"
+      - key: TITAN_DATABASE_URL
+        value: sqlite:////tmp/titan.db
+      - key: TITAN_DATA_DIR
+        value: /tmp/titan-data
+# FREE PLAN: ephemeral filesystem only. SQLite data and local credentials can be lost
+# on restart, spin-down, or redeploy. Use Demo-only; never rely on this for trading.
+# Persistent disks require a paid Render web-service plan.
+# Set TITAN_SECRET_KEY (32+ chars), TITAN_ALLOWED_EMAILS, and exact
+# TITAN_ALLOWED_ORIGINS in the Render dashboard before exposing the service.
+# Render Free can spin down after inactivity; this is not 24/7 hosting.

@@ -1,0 +1,72 @@
+name: TITAN Current Source CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/**'
+      - '.github/workflows/titan-source-ci.yml'
+      - '.github/workflows/titan-offline-stability-soak.yml'
+      - '.github/workflows/titan-deep-audit.yml'
+      - '.github/workflows/package-titan-final.yml'
+      - '.github/workflows/titan-futures-testnet-preflight.yml'
+      - '.github/workflows/titan-testnet-order-lifecycle.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/**'
+      - '.github/workflows/titan-source-ci.yml'
+      - '.github/workflows/titan-offline-stability-soak.yml'
+      - '.github/workflows/titan-deep-audit.yml'
+      - '.github/workflows/package-titan-final.yml'
+      - '.github/workflows/titan-futures-testnet-preflight.yml'
+      - '.github/workflows/titan-testnet-order-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: titan-current-source-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+    steps:
+      - name: Checkout current repository source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile backend Python modules
+        run: python -m compileall -q app tests
+
+      - name: Run backend regression tests
+        env:
+          TITAN_LIVE_TRADING_ENABLED: 'false'
+          TITAN_BINANCE_PUBLIC_DATA_ENABLED: 'false'
+        run: python -m pytest -q tests --disable-warnings
+
+      - name: Confirm test scope
+        if: always()
+        run: |
+          echo "Tests run against the current repository backend source."
+          echo "No Binance API credentials are configured."
+          echo "No Binance orders are submitted by this workflow."

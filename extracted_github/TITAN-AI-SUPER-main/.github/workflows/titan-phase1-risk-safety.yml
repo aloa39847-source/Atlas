@@ -1,0 +1,52 @@
+name: TITAN Phase 1 Risk Safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/**'
+      - '.github/workflows/titan-phase1-risk-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: titan-phase1-risk-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Compile backend and tests
+        run: python -m compileall -q app tests
+      - name: Run backend regression suite
+        env:
+          TITAN_LIVE_TRADING_ENABLED: 'false'
+          TITAN_BINANCE_PUBLIC_DATA_ENABLED: 'false'
+        run: python -m pytest -q tests --disable-warnings
+      - name: Confirm safe test scope
+        if: always()
+        run: |
+          echo "No Binance API credentials are configured."
+          echo "No real or Testnet orders are submitted by this workflow."
+          echo "Tests use local fixtures and isolated temporary databases where provided."

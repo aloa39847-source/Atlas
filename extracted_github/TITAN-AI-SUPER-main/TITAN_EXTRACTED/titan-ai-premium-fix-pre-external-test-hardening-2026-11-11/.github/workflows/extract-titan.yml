@@ -1,0 +1,118 @@
+name: Extract TITAN project ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Safely extract project archive
+        env:
+          ZIP_PATH: titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc.zip
+          DEST_DIR: titan_project
+        run: |
+          python - <<'PY'
+          import os
+          import stat
+          import zipfile
+          from pathlib import PurePosixPath, Path
+
+          archive = Path(os.environ["ZIP_PATH"])
+          destination = Path(os.environ["DEST_DIR"])
+
+          if not archive.is_file():
+              raise SystemExit(f"Archive not found: {archive}")
+          if destination.exists():
+              raise SystemExit(f"Refusing to overwrite existing directory: {destination}")
+
+          destination.mkdir(parents=True)
+          total_size = 0
+          written = 0
+          skipped = []
+
+          with zipfile.ZipFile(archive) as zf:
+              entries = zf.infolist()
+              if len(entries) > 50000:
+                  raise SystemExit("Archive contains too many entries; stopped for safety.")
+
+              for info in entries:
+                  raw_name = info.filename
+                  if not raw_name or "\\\\" in raw_name:
+                      skipped.append((raw_name, "invalid path"))
+                      continue
+
+                  member = PurePosixPath(raw_name)
+                  if member.is_absolute() or any(part in ("", ".", "..") for part in member.parts):
+                      skipped.append((raw_name, "unsafe path"))
+                      continue
+
+                  if not member.parts or member.parts[0].endswith(":"):
+                      skipped.append((raw_name, "absolute/drive path"))
+                      continue
+
+                  if any(part.lower() == ".git" for part in member.parts):
+                      skipped.append((raw_name, "git metadata"))
+                      continue
+
+                  base = member.name.lower()
+                  if base.startswith(".env") and base not in (".env.example", ".env.sample", ".env.template"):
+                      skipped.append((raw_name, "environment secret file"))
+                      continue
+                  if base.endswith((".pem", ".p12", ".pfx", ".key", ".keystore")) or base in ("id_rsa", "id_ed25519"):
+                      skipped.append((raw_name, "possible private key"))
+                      continue
+
+                  mode = (info.external_attr >> 16) & 0xFFFF
+                  if stat.S_ISLNK(mode):
+                      skipped.append((raw_name, "symbolic link"))
+                      continue
+
+                  if info.is_dir():
+                      (destination / Path(*member.parts)).mkdir(parents=True, exist_ok=True)
+                      continue
+
+                  if info.file_size > 200 * 1024 * 1024:
+                      raise SystemExit(f"File too large; stopped: {raw_name}")
+                  total_size += info.file_size
+                  if total_size > 1024 * 1024 * 1024:
+                      raise SystemExit("Expanded archive exceeds 1 GiB; stopped for safety.")
+
+                  target = destination / Path(*member.parts)
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  if target.exists():
+                      raise SystemExit(f"Duplicate/colliding archive path; stopped: {raw_name}")
+
+                  with zf.open(info, "r") as source, target.open("xb") as output:
+                      while True:
+                          chunk = source.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          output.write(chunk)
+                  written += 1
+
+          print(f"Extraction complete: {written} files written to {destination}/")
+          print(f"Skipped entries: {len(skipped)}")
+          for name, reason in skipped[:100]:
+              print(f"SKIPPED [{reason}]: {name}")
+          PY
+
+      - name: Commit extracted files to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- titan_project
+          if git diff --cached --quiet; then
+            echo "No extracted files to commit."
+          else
+            git commit -m "Extract TITAN project archive"
+            git push origin main
+          fi

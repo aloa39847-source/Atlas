@@ -1,0 +1,62 @@
+name: TITAN 30-Minute Offline Stability Soak
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/titan-30-minute-soak.yml"
+      - "TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/app/**"
+      - "TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/tests/**"
+      - "TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run 30-minute offline Spot and Futures soak across all 15 timeframes
+        run: |
+          set -o pipefail
+          python -m app.scripts.run_stability_soak --duration-seconds 1800 | tee stability-soak.jsonl
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          rows = [json.loads(line) for line in Path("stability-soak.jsonl").read_text().splitlines() if line.strip()]
+          finals = [row for row in rows if row.get("event") == "final"]
+          assert len(finals) == 1, "expected exactly one final soak report"
+          report = finals[0]
+          assert report["result"] == "passed", report
+          assert report["duration_seconds"] >= 1800, report
+          assert report["requested_duration_seconds"] == 1800, report
+          assert report["cycles"] > 0 and report["decision_count"] > 0, report
+          assert report["timeframes_per_symbol"] == 15, report
+          assert report["market_types"] == ["spot", "futures"], report
+          assert report["analysis_count"] == report["decision_count"] * 15, report
+          assert report["network_calls"] == 0 and report["exchange_orders"] == 0, report
+          assert report["live_trading"] is False, report
+          print("Validated full 30-minute offline stability report:")
+          print(json.dumps(report, sort_keys=True))
+          PY
+      - name: Upload soak progress and final report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-30-minute-offline-soak-${{ github.run_id }}
+          path: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/stability-soak.jsonl
+          if-no-files-found: ignore

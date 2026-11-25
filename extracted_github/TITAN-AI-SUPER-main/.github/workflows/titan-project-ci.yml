@@ -1,0 +1,194 @@
+name: TITAN Project CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/**"
+      - ".github/workflows/**"
+      - "render.yaml"
+      - ".gitignore"
+  pull_request:
+    branches: [main]
+    paths:
+      - "TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/**"
+      - ".github/workflows/**"
+      - "render.yaml"
+      - ".gitignore"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: titan-project-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_DIR: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+      - name: Compile backend modules
+        run: python -m compileall -q backend/app backend/tests
+      - name: Run backend tests
+        run: python -m pytest -q backend/tests --junitxml=backend-test-results.xml
+      - name: Upload backend test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-backend-test-report-${{ github.run_id }}
+          path: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend-test-results.xml
+          if-no-files-found: ignore
+
+  frontend:
+    # Pin a Playwright-supported image; ubuntu-latest currently resolves to 26.04.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Install headless browser for real UI interaction tests
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install chromium
+      - name: Run frontend API tests
+        run: npm run test:api
+      - name: Build frontend
+        run: npm run build
+      - name: Run frontend runtime smoke test
+        run: npm run test:runtime
+      - name: Run live Vite browser and Android viewport tests
+        run: npm run test:browser
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate repository-root secret exclusions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pattern in ".env" ".env.*" "*.pem" "*.key" "secrets/" "**/*credentials*.json" "**/*creds*.json" "*.db" "*.sqlite*" "*.log"; do
+            grep -Fqx "$pattern" .gitignore
+          done
+          git check-ignore -q --no-index .env
+          if git check-ignore -q --no-index .env.example; then
+            echo ".env.example must remain trackable" >&2
+            exit 1
+          fi
+          if grep -Fqx "*.zip" .gitignore; then
+            echo "Do not blanket-ignore ZIP archives; preserve the reference archive" >&2
+            exit 1
+          fi
+      - name: Validate Render monorepo Docker paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          for blueprint in render.yaml "${PROJECT_DIR}/render.yaml"; do
+            grep -Fqx "    rootDir: ${PROJECT_DIR}" "$blueprint"
+            grep -Fqx "    autoDeployTrigger: checksPass" "$blueprint"
+            grep -Fqx '        value: "true"' "$blueprint"
+            grep -Fqx '        value: "false"' "$blueprint"
+            grep -Fqx "    dockerfilePath: ${PROJECT_DIR}/Dockerfile" "$blueprint"
+            grep -Fqx "    dockerContext: ${PROJECT_DIR}" "$blueprint"
+          done
+      - name: Validate Docker context excludes credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pattern in "*.pem" "*.key" "secrets/" "**/*credentials*.json" "**/*creds*.json"; do
+            grep -Fqx "$pattern" "${PROJECT_DIR}/.dockerignore"
+          done
+      - name: Build production Docker image
+        run: docker build --pull -t titan-ai-premium:ci TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+      - name: Smoke-test the bundled mobile terminal and API
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name titan-ai-premium-ci -p 8000:8000 \
+            -e TITAN_SECRET_KEY="ci-only-secret-key-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ" \
+            -e TITAN_AUTH_REQUIRED=false \
+            -e TITAN_DATABASE_URL="sqlite:////tmp/titan-ci.db" \
+            -e TITAN_DATA_DIR="/tmp/titan-ci-data" \
+            titan-ai-premium:ci
+          cleanup() { docker rm -f titan-ai-premium-ci >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8000/api/health >/tmp/titan-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          grep -q '"ok":true' /tmp/titan-health.json
+          curl --fail --silent http://127.0.0.1:8000/ >/tmp/titan-index.html
+          grep -q '/assets/' /tmp/titan-index.html
+          curl --fail --silent http://127.0.0.1:8000/manifest.webmanifest >/tmp/titan-manifest.json
+          grep -q '"display": "standalone"' /tmp/titan-manifest.json
+          curl --fail --silent http://127.0.0.1:8000/icon-192.png >/tmp/titan-icon-192.png
+          curl --fail --silent http://127.0.0.1:8000/icon-512.png >/tmp/titan-icon-512.png
+          python - <<'PY'
+          import struct
+          from pathlib import Path
+          for size in (192, 512):
+              data = Path(f"/tmp/titan-icon-{size}.png").read_bytes()
+              assert data.startswith(b"\x89PNG\r\n\x1a\n"), f"invalid PNG icon: {size}"
+              width, height = struct.unpack(">II", data[16:24])
+              assert (width, height) == (size, size), f"wrong icon dimensions: {width}x{height}"
+          PY
+          curl --fail --silent http://127.0.0.1:8000/sw.js >/tmp/titan-sw.js
+          grep -q 'titan-shell' /tmp/titan-sw.js
+          grep -q 'url.pathname.startsWith("/api/")' /tmp/titan-sw.js
+
+  stability-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run 30-minute offline Spot and Futures stability soak
+        timeout-minutes: 35
+        run: |
+          set -o pipefail
+          python -u -m app.scripts.run_stability_soak --duration-seconds 1800 | tee stability-soak.jsonl
+      - name: Upload 30-minute stability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-30-minute-final-stability-${{ github.run_id }}
+          path: ${{ env.PROJECT_DIR }}/backend/stability-soak.jsonl
+          if-no-files-found: ignore
+

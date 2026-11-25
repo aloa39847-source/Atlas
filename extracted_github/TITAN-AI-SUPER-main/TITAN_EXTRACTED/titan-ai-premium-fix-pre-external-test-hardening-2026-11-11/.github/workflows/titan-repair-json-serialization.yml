@@ -1,0 +1,142 @@
+name: TITAN Apply Verified Internal Fix
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/titan-repair-json-serialization.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+
+      - name: Locate authoritative ZIP
+        id: zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . -type f -name '8ptblr.zip' -not -path './.git/*')
+          test "${#files[@]}" -eq 1
+          echo "path=${files[0]}" >> "$GITHUB_OUTPUT"
+          sha256sum "${files[0]}" | tee "$RUNNER_TEMP/zip-before.sha256"
+
+      - name: Apply verified serialization repair inside authoritative ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/src"
+          python - "${{ steps.zip.outputs.path }}" "$RUNNER_TEMP/src" <<'PY'
+          import sys, zipfile
+          from pathlib import PurePosixPath
+          zpath, dest = sys.argv[1:]
+          with zipfile.ZipFile(zpath) as z:
+              for info in z.infolist():
+                  p=PurePosixPath(info.filename)
+                  if p.is_absolute() or ".." in p.parts or "\\" in info.filename:
+                      raise SystemExit(f"Unsafe archive path: {info.filename}")
+              z.extractall(dest)
+          PY
+          ROOT="$RUNNER_TEMP/src/TITAN_SUPER_AI_PREMIUM_COMPLETE/backend"
+          test -f "$ROOT/app/engines/hybrid/coordinator.py"
+          python - "$ROOT" <<'PY'
+          from pathlib import Path
+          import sys
+          root=Path(sys.argv[1])
+          p=root/"app/engines/hybrid/coordinator.py"
+          s=p.read_text()
+          marker="class HybridIntelligenceCoordinator(Engine):"
+          helper='''def _analysis_payload(analysis):
+              if analysis is None:
+                  return None
+              return {
+                  "timeframe": getattr(getattr(analysis, "timeframe", None), "value", None),
+                  "trend": getattr(analysis, "trend", "unknown"),
+                  "signals": list(getattr(analysis, "signals", []) or []),
+                  "indicators": dict(getattr(analysis, "indicators", {}) or {}),
+                  "structure": dict(getattr(analysis, "structure", {}) or {}),
+                  "candles": dict(getattr(analysis, "candles", {}) or {}),
+              }
+
+
+          '''
+          if "def _analysis_payload(" not in s:
+              if marker not in s:
+                  raise SystemExit("Coordinator class marker missing; refusing ZIP edit.")
+              s=s.replace(marker, helper+marker, 1)
+          if '"analysis": analyses.get(tf),' in s:
+              s=s.replace('"analysis": analyses.get(tf),','"analysis": _analysis_payload(analyses.get(tf)),')
+          elif '"analysis": _analysis_payload(analyses.get(tf)),' not in s:
+              raise SystemExit("Analysis result field missing; refusing ZIP edit.")
+          s=s.replace('trends.append(results[tf.value]["analysis"].trend)','trends.append(results[tf.value]["analysis"]["trend"])')
+          p.write_text(s)
+          test=root/"tests/test_hybrid_serialization.py"
+          test.write_text('''import json
+
+          from app.engines.hybrid.coordinator import HybridIntelligenceCoordinator
+          from app.engines.market_data import MarketDataEngine
+          from app.engines.technical import TimeframeAnalysis
+
+
+          def test_hybrid_analysis_is_json_serializable():
+              batches = MarketDataEngine().get_multi_timeframe("BTC/USDT", seed=42)
+              analyses = {
+                  tf: TimeframeAnalysis(
+                      timeframe=tf, trend="bullish", signals=["higher_high"],
+                      indicators={"close": 100.0, "rsi14": 55.0},
+                      structure={"bias": "bullish"}, candles={"pattern": "bullish"},
+                  )
+                  for tf in batches
+              }
+              result = HybridIntelligenceCoordinator().analyze_multi_timeframe(batches, analyses)
+              encoded = json.dumps(result)
+              assert '"trend": "bullish"' in encoded
+              assert result["per_timeframe"]["1d"]["analysis"]["timeframe"] == "1d"
+          ''')
+          PY
+
+      - name: Install backend dependencies and run full offline test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/src/TITAN_SUPER_AI_PREMIUM_COMPLETE/backend"
+          python -m pip install -r "$ROOT/requirements.txt"
+          (cd "$ROOT" && python -m compileall -q app tests && pytest -q)
+
+      - name: Rebuild ZIP while preserving its project contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${{ steps.zip.outputs.path }}" "$RUNNER_TEMP/src" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          archive, root=sys.argv[1:]
+          root=Path(root)
+          tmp=Path(archive).with_suffix(".zip.repaired")
+          with zipfile.ZipFile(tmp,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+              for p in sorted(root.rglob("*")):
+                  if p.is_file():
+                      z.write(p,p.relative_to(root).as_posix())
+          with zipfile.ZipFile(tmp) as z:
+              bad=z.testzip()
+              if bad: raise SystemExit(f"New ZIP CRC failure: {bad}")
+          Path(archive).write_bytes(tmp.read_bytes())
+          tmp.unlink()
+          PY
+          sha256sum "${{ steps.zip.outputs.path }}" | tee "$RUNNER_TEMP/zip-after.sha256"
+
+      - name: Commit only the repaired authoritative ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${{ steps.zip.outputs.path }}"
+          git commit -m "Fix hybrid analysis JSON serialization and add regression test"
+          git push

@@ -1,0 +1,23 @@
+{
+  "name": "titan-ai-premium-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "test:api": "node --test tests/api.integration.test.js",
+    "test:runtime": "node --test tests/runtime.smoke.test.js tests/market-stream.test.js",
+    "test:browser": "node --test tests/browser.integration.test.js"
+  },
+  "dependencies": {
+    "@rollup/wasm-node": "^4.67.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
+  }
+}

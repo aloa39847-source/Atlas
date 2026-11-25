@@ -1,0 +1,228 @@
+name: Package one verified TITAN SUPER AI PREMIUM ZIP
+
+on:
+  workflow_run:
+    workflows: ["TITAN Offline Stability Soak"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      expected_app_sha:
+        description: "Exact main commit whose backend, frontend, and 30-minute soak have all passed"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  package-one-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the current main source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify tested application commit and completed CI/soak runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_APP_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.expected_app_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_SHA="$(git rev-parse HEAD)"
+          if [[ ! "$EXPECTED_APP_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected_app_sha_must_be_full_40_character_commit_sha"
+            exit 2
+          fi
+          git cat-file -e "${EXPECTED_APP_SHA}^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_APP_SHA" "$CURRENT_SHA"
+          CHANGED="$(git diff --name-only "$EXPECTED_APP_SHA" "$CURRENT_SHA")"
+          if [[ -n "$CHANGED" && "$CHANGED" != ".github/workflows/package-titan-final.yml" ]]; then
+            echo "Main contains application changes beyond the exact tested app commit:"
+            printf '%s\n' "$CHANGED"
+            exit 3
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" > runs.json
+          python - <<'PY'
+          import json, os, subprocess, sys
+          runs = json.load(open("runs.json", encoding="utf-8")).get("workflow_runs", [])
+          expected_sha = os.environ["EXPECTED_APP_SHA"]
+          required_exact = {"TITAN Current Source CI", "TITAN Offline Stability Soak"}
+          exact_passed = {
+              row.get("name") for row in runs
+              if row.get("head_sha") == expected_sha
+              and row.get("event") == "push"
+              and row.get("head_branch") == "main"
+              and row.get("status") == "completed"
+              and row.get("conclusion") == "success"
+          }
+          missing = sorted(required_exact - exact_passed)
+          if missing:
+              print("Required successful runs for the exact tested app commit are missing:", ", ".join(missing))
+              sys.exit(1)
+
+          # Backend-only changes do not invalidate a previously successful
+          # frontend build. Reuse a successful main push build only when its
+          # commit is an ancestor of the tested app SHA and frontend/ is byte-identical.
+          frontend_path = "titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/frontend"
+          frontend_run = None
+          for row in runs:
+              candidate = row.get("head_sha")
+              if (row.get("name") != "TITAN Frontend Build CI"
+                      or row.get("event") != "push" or row.get("head_branch") != "main"
+                      or row.get("status") != "completed" or row.get("conclusion") != "success"
+                      or not isinstance(candidate, str)):
+                  continue
+              ancestor = subprocess.run(
+                  ["git", "merge-base", "--is-ancestor", candidate, expected_sha],
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+              ).returncode == 0
+              if not ancestor:
+                  continue
+              unchanged = subprocess.run(
+                  ["git", "diff", "--quiet", candidate, expected_sha, "--", frontend_path],
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+              ).returncode == 0
+              if unchanged:
+                  frontend_run = row
+                  break
+          if frontend_run is None:
+              print("No successful main frontend build exists for the tested commit or an ancestor with unchanged frontend sources.")
+              sys.exit(1)
+
+          soak = next(row for row in runs if row.get("name") == "TITAN Offline Stability Soak"
+                      and row.get("head_sha") == expected_sha
+                      and row.get("event") == "push" and row.get("head_branch") == "main"
+                      and row.get("status") == "completed" and row.get("conclusion") == "success")
+          print("Verified exact-commit backend CI and 30-minute soak.")
+          print("Verified frontend build with unchanged frontend sources:", frontend_run.get("html_url"))
+          print("Verified soak run:", soak.get("html_url"))
+          PY
+
+      - name: Build exactly one clean ZIP with one project root
+        env:
+          EXPECTED_APP_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.expected_app_sha }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          project = Path("titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc")
+          output = Path("TITAN_SUPER_AI_PREMIUM_FINAL.zip")
+          if not project.is_dir():
+              raise SystemExit("current TITAN project directory is missing")
+
+          excluded_dirs = {
+              ".git", "recovered", "node_modules", ".venv", "venv", "__pycache__",
+              ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "dist-api-origin",
+              "build", "coverage", "htmlcov",
+          }
+          excluded_suffixes = {
+              ".zip", ".pyc", ".pyo", ".db", ".sqlite", ".sqlite3", ".pem",
+              ".p12", ".pfx", ".key", ".keystore", ".log",
+          }
+          files = []
+          for path in sorted(project.rglob("*")):
+              if not path.is_file():
+                  continue
+              rel = path.relative_to(project)
+              if any(part in excluded_dirs for part in rel.parts):
+                  continue
+              # Runtime state may contain encrypted API credentials; never ship it.
+              if len(rel.parts) >= 2 and rel.parts[:2] == ("backend", "data"):
+                  continue
+              name = path.name.lower()
+              if name.startswith(".env") and name not in {".env.example", ".env.sample", ".env.template"}:
+                  continue
+              if (("creds" in name or "credential" in name or "secret" in name or "api_key" in name or "api_secret" in name or "private_key" in name)
+                      and path.suffix.lower() not in {".py", ".md", ".rst"}):
+                  continue
+              if path.suffix.lower() in excluded_suffixes:
+                  continue
+              if name in {"id_rsa", "id_ed25519", ".ds_store", ".coverage"}:
+                  continue
+              mode = path.lstat().st_mode
+              if stat.S_ISLNK(mode):
+                  continue
+              files.append((path, rel.as_posix()))
+
+          required = {
+              "backend/app/star_app.py",
+              "backend/app/services/binance_execution.py",
+              "backend/app/services/binance_trading_worker.py",
+              "frontend/src/TerminalDashboard.jsx",
+              "frontend/src/api.js",
+          }
+          present = {rel for _, rel in files}
+          missing = sorted(required - present)
+          if missing:
+              raise SystemExit("Required current project files are missing: " + ", ".join(missing))
+          if not files:
+              raise SystemExit("refusing to create an empty archive")
+
+          # Scan text content as well as filenames; never package a non-placeholder credential.
+          import re
+          credential_assignment = re.compile(
+              r"""(?im)^[ \t]*(?:export[ \t]+)?(?:BINANCE_API_KEY|BINANCE_API_SECRET|BINANCE_TESTNET_API_KEY|BINANCE_TESTNET_API_SECRET|AI_API_KEY|TELEGRAM_BOT_TOKEN|TOKENOMIST_API_KEY|XOOMAR_API_KEY|TITAN_SECRET_KEY)[ \t]*[:=][ \t]*['"]?([^\r\n'"]{16,})['"]?[ \t]*(?:#.*)?$"""
+          )
+          placeholders = ("replace", "your_", "example", "placeholder", "change_me", "changeme", "dev-only")
+          for path, rel in files:
+              try:
+                  raw = path.read_bytes()
+                  if b"-----BEGIN " in raw and b"PRIVATE KEY-----" in raw:
+                      raise SystemExit("Private-key material detected in " + rel)
+                  if b"\x00" in raw[:4096]:
+                      continue
+                  content = raw.decode("utf-8")
+              except UnicodeDecodeError:
+                  continue
+              for match in credential_assignment.finditer(content):
+                  value = match.group(1).strip()
+                  if value and not any(marker in value.lower() for marker in placeholders):
+                      raise SystemExit("Credential-like assignment detected in " + rel)
+
+          with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+              for path, rel in files:
+                  zf.write(path, "TITAN_SUPER_AI_PREMIUM/" + rel)
+          with zipfile.ZipFile(output, "r") as zf:
+              names = zf.namelist()
+              if zf.testzip() is not None:
+                  raise SystemExit("ZIP integrity check failed")
+              roots = {name.split("/", 1)[0] for name in names}
+              if roots != {"TITAN_SUPER_AI_PREMIUM"}:
+                  raise SystemExit("archive must contain exactly one TITAN project root")
+              if len(names) != len(set(names)):
+                  raise SystemExit("duplicate archive paths detected")
+              if any("/recovered/" in name or name.endswith(".zip") for name in names):
+                  raise SystemExit("nested/old archive content detected")
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          print(f"Project files packaged: {len(files)}")
+          print(f"ZIP bytes: {output.stat().st_size}")
+          print(f"SHA256: {digest}")
+          print(f"Tested application commit: {os.environ['EXPECTED_APP_SHA']}")
+          PY
+
+      - name: Publish the single ZIP as the only release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_APP_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.expected_app_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="titan-super-ai-premium-final-$(date -u +%Y%m%d)-${EXPECTED_APP_SHA:0:7}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" TITAN_SUPER_AI_PREMIUM_FINAL.zip --clobber
+          else
+            gh release create "$TAG" TITAN_SUPER_AI_PREMIUM_FINAL.zip \
+              --target "$(git rev-parse HEAD)" \
+              --title "TITAN SUPER AI PREMIUM — Final verified build" \
+              --notes "Single clean project ZIP. App source verified at ${EXPECTED_APP_SHA}; backend CI, frontend CI, and 30-minute offline stability soak all completed successfully. The archive contains one project root and excludes recovered/old archives, nested ZIPs, credentials, local databases, and build caches."
+          fi
+          gh release view "$TAG" --json url,assets --jq '{url: .url, assets: [.assets[].name]}'

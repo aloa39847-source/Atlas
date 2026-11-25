@@ -1,0 +1,236 @@
+# Offline validation of the authoritative candidate ZIP; no exchange orders are sent.
+name: TITAN Knowledge Foundation Validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/titan-knowledge-foundation.yml'
+      - '.github/scripts/apply_risk_input_validation.py'
+      - '.github/scripts/apply_gateway_numeric_validation.py'
+      - '.github/scripts/apply_exchange_filter_fail_closed.py'
+      - '.github/scripts/apply_market_order_price_source.py'
+      - '.github/scripts/apply_learning_metrics_validation.py'
+      - '.github/scripts/apply_futures_position_mode_guard.py'
+      - '.github/scripts/apply_binance_status_validation.py'
+      - '.github/scripts/apply_withdrawal_status_clarity.py'
+      - '.github/scripts/apply_futures_side_normalization.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/titan-knowledge-foundation.yml'
+      - '.github/scripts/apply_risk_input_validation.py'
+      - '.github/scripts/apply_gateway_numeric_validation.py'
+      - '.github/scripts/apply_exchange_filter_fail_closed.py'
+      - '.github/scripts/apply_market_order_price_source.py'
+      - '.github/scripts/apply_learning_metrics_validation.py'
+      - '.github/scripts/apply_futures_position_mode_guard.py'
+      - '.github/scripts/apply_binance_status_validation.py'
+      - '.github/scripts/apply_withdrawal_status_clarity.py'
+      - '.github/scripts/apply_futures_side_normalization.py'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: titan-knowledge-foundation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Set up supported Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Locate and extract authoritative ZIP
+        id: zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$(find . -type f -name '8ptblr.zip' -print -quit)"
+          test -n "$ZIP"
+          DEST="$RUNNER_TEMP/titan-knowledge-source"
+          mkdir -p "$DEST"
+          python - "$ZIP" "$DEST" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          archive, dest = sys.argv[1:]
+          with zipfile.ZipFile(archive) as z:
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit(f"Source ZIP CRC failure: {bad}")
+              z.extractall(dest)
+          root = None
+          for candidate in Path(dest).rglob("core_service.py"):
+              if candidate.parent.name == "services" and candidate.parent.parent.name == "app":
+                  root = candidate.parent.parent.parent
+                  break
+          if root is None or not (root / "requirements.txt").is_file():
+              raise SystemExit("Backend root discovery failed")
+          with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"root={root}\n")
+          PY
+          echo "path=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Apply source-linked knowledge and autonomy gates
+        # Each patch is syntax-checked immediately to isolate malformed transformations.
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="${{ steps.zip.outputs.root }}"
+          run_patch() {
+            local script="$1"
+            echo "::group::Apply $script"
+            python "$script" "$ROOT"
+            echo "Syntax-checking exchange adapter and application routes after $script"
+            python -m py_compile "$ROOT/app/integrations/binance_adapter.py" "$ROOT/app/star_app.py"
+            echo "::endgroup::"
+          }
+          run_patch .github/scripts/apply_knowledge_foundation_v2.py
+          run_patch .github/scripts/apply_knowledge_seed_catalog.py
+          run_patch .github/scripts/apply_credentials_crypto.py
+          run_patch .github/scripts/apply_auth_admin_hardening.py
+          run_patch .github/scripts/apply_technical_patterns.py
+          run_patch .github/scripts/apply_risk_zero_cap_hardening.py
+          run_patch .github/scripts/apply_shadow_accounting_fix.py
+          run_patch .github/scripts/apply_testnet_order_reconciliation.py
+          run_patch .github/scripts/apply_safe_testnet_close.py
+          run_patch .github/scripts/apply_prediction_performance.py
+          run_patch .github/scripts/apply_position_management.py
+          run_patch .github/scripts/apply_portfolio_management.py
+          run_patch .github/scripts/apply_protection_cycle_integration.py
+          run_patch .github/scripts/apply_engine_registry_sync.py
+          run_patch .github/scripts/apply_risk_input_validation.py
+          run_patch .github/scripts/apply_gateway_numeric_validation.py
+          run_patch .github/scripts/apply_exchange_filter_fail_closed.py
+          run_patch .github/scripts/apply_market_order_price_source.py
+          run_patch .github/scripts/apply_learning_metrics_validation.py
+          run_patch .github/scripts/apply_futures_position_mode_guard.py
+          run_patch .github/scripts/apply_futures_side_normalization.py
+          run_patch .github/scripts/apply_binance_status_validation.py
+          run_patch .github/scripts/apply_withdrawal_status_clarity.py
+          python - "$ROOT" <<'PY'
+          import sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          checks = {
+              "engine registry synchronization": (root / "app/services/core_service.py", "Implementation status synchronized"),
+              "risk finite-number validation": (root / "app/engines/risk.py", "_finite_number"),
+              "gateway finite-number guard": (root / "app/engines/order_gateway.py", "Fail closed before compliance checks or arithmetic"),
+              "market order reference-price guard": (root / "app/engines/order_gateway.py", "caller_supplied_market_price_ignored"),
+              "gateway numeric tests": (root / "tests/test_gateway_numeric_validation.py", "test_gateway_rejects_non_finite_order_inputs_before_compliance"),
+              "exchange filter loader": (root / "app/integrations/binance_adapter.py", "def _load_order_filters"),
+              "exchange filter tests": (root / "tests/test_exchange_filter_fail_closed.py", "test_testnet_place_order_never_sends_when_exchange_filters_unavailable"),
+              "risk validation tests": (root / "tests/test_risk_input_validation.py", "test_trade_validation_fails_closed_for_non_finite_inputs"),
+              "shadow close guard": (root / "app/services/shadow_trading.py", "real_position_close_not_supported_by_shadow_service"),
+              "protection cycle integration": (root / "tests/test_protection_cycle_integration.py", "test_orchestrator_closes_shadow_position_on_live_public_protection_trigger"),
+              "knowledge coverage": (root / "app/knowledge/base.py", "def coverage_report(db=None)"),
+              "knowledge source catalog": (root / "app/knowledge/base.py", "def source_catalog()"),
+              "knowledge startup gate": (root / "app/services/core_service.py", "master.start_blocked_knowledge_foundation"),
+              "learning finite metric validation": (root / "app/learning/continuous.py", "def finite_number(source: dict, key: str)"),
+              "learning malformed metric tests": (root / "tests/test_continuous_learning_safety.py", "test_learning_gate_rejects_non_finite_metrics"),
+              "Futures position-mode preflight": (root / "app/integrations/binance_adapter.py", "def get_position_mode(self)"),
+              "Futures position-mode tests": (root / "tests/test_futures_position_mode.py", "test_futures_hedge_mode_sets_exchange_side_and_position_side"),
+              "Futures side-normalization regression": (root / "tests/test_futures_order_side_normalization.py", "test_futures_side_normalization_reads_position_mode_once"),
+              "Binance account status validation": (root / "app/integrations/binance_adapter.py", "invalid_or_error_account_payload"),
+              "Binance account status tests": (root / "tests/test_binance_status_validation.py", "test_negative_api_code_is_not_reported_as_connected"),
+              "withdrawal permission clarity": (root / "app/integrations/binance_adapter.py", "unknown_not_checked"),
+              "withdrawal permission clarity tests": (root / "tests/test_binance_status_validation.py", "test_adapter_does_not_claim_api_key_withdrawals_are_disabled"),
+          }
+          missing = []
+          for label, (path, needle) in checks.items():
+              if not path.is_file() or needle not in path.read_text():
+                  missing.append(label)
+          if missing:
+              raise SystemExit("Required source checks missing: " + ", ".join(missing))
+          print(f"Verified {len(checks)} required source checks.")
+          PY
+
+      - name: Install dependencies and run complete offline suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="${{ steps.zip.outputs.root }}"
+          python -m pip install --upgrade pip
+          python -m pip install -r "$ROOT/requirements.txt"
+          python -m pip install pytest httpx
+          cd "$ROOT"
+          python -m compileall -q app tests
+          pytest -q | tee "$RUNNER_TEMP/pytest-report.txt"
+
+      - name: Rebuild and CRC-verify candidate ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${{ steps.zip.outputs.path }}" "${{ steps.zip.outputs.root }}" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          archive, root = sys.argv[1:]
+          root = Path(root)
+          tmp = Path(archive).with_suffix(".zip.knowledge")
+          with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+              for p in sorted(root.rglob("*")):
+                  if not p.is_file():
+                      continue
+                  rel = p.relative_to(root)
+                  if any(part in {"__pycache__", ".pytest_cache"} for part in rel.parts):
+                      continue
+                  if p.suffix == ".pyc" or p.suffix == ".db" or p.name.startswith(".env"):
+                      continue
+                  z.write(p, rel.as_posix())
+          with zipfile.ZipFile(tmp) as z:
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit(f"Rebuilt ZIP CRC failure: {bad}")
+              names = z.namelist()
+              if any("__pycache__" in n or ".pytest_cache" in n or n.endswith(".pyc") for n in names):
+                  raise SystemExit("Generated Python cache files must not be packaged")
+          Path(archive).write_bytes(tmp.read_bytes())
+          tmp.unlink()
+          PY
+          sha256sum "${{ steps.zip.outputs.path }}"
+
+
+      - name: Package sanitized source review and test evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="${{ steps.zip.outputs.root }}"
+          tar -czf "$RUNNER_TEMP/titan-backend-source.tar.gz" \
+            --exclude='__pycache__' --exclude='*.pyc' --exclude='.env*' --exclude='*.db' \
+            -C "$ROOT" app tests requirements.txt
+
+      - name: Upload validated ZIP and sanitized source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-knowledge-validation-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            ${{ steps.zip.outputs.path }}
+            ${{ runner.temp }}/pytest-report.txt
+            ${{ runner.temp }}/titan-backend-source.tar.gz
+
+      - name: Commit verified candidate ZIP to PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${{ steps.zip.outputs.path }}"
+          if git diff --cached --quiet; then
+            echo "No ZIP changes to commit."
+          else
+            git commit -m "Add verified knowledge coverage and autonomy gates"
+            TARGET_BRANCH="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+            git push origin "HEAD:${TARGET_BRANCH}"
+          fi

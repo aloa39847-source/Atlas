@@ -1,0 +1,82 @@
+name: TITAN CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+      - name: Compile backend modules
+        run: python -m compileall -q backend/app backend/tests
+      - name: Run backend tests
+        run: python -m pytest -q backend/tests --junitxml=backend-test-results.xml
+      - name: Upload backend test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-report-${{ github.run_id }}
+          path: backend-test-results.xml
+          if-no-files-found: ignore
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend (same-origin API)
+        working-directory: frontend
+        run: npm run build
+      - name: Build frontend (separate backend origin)
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: https://backend.example.test
+        run: npm run build -- --outDir dist-api-origin
+
+  demo-shadow-smoke:
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TITAN_AUTH_REQUIRED: "false"
+      TITAN_DATABASE_URL: "sqlite:////tmp/titan_demo_smoke.db"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+      - name: Run one isolated Spot Demo Shadow cycle using read-only Binance Public data
+        working-directory: backend
+        run: python -m app.scripts.run_demo_smoke
+
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build production Docker image
+        run: docker build --pull -t titan-ai-premium:ci .

@@ -1,0 +1,58 @@
+name: TITAN Offline Stability Soak
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/titan-offline-stability-soak.yml"
+      - "titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/app/**"
+      - "titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/tests/**"
+      - "titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt"
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: "Soak duration (60 to 2400 seconds)"
+        required: true
+        default: "1800"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: titan-offline-stability-soak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/requirements.txt
+      - name: Run offline 15-timeframe stability soak
+        timeout-minutes: 45
+        working-directory: titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend
+        shell: bash
+        run: |
+          set -o pipefail
+          DURATION="${{ github.event.inputs.duration_seconds || '1800' }}"
+          if [[ ! "$DURATION" =~ ^[0-9]+$ ]] || (( DURATION < 60 || DURATION > 2400 )); then
+            echo "duration_seconds_must_be_between_60_and_2400"
+            exit 2
+          fi
+          python -u -m app.scripts.run_stability_soak --duration-seconds "$DURATION" | tee soak-report.json
+      - name: Upload soak report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-offline-soak-report
+          path: titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/soak-report.json
+          if-no-files-found: ignore
