@@ -157,7 +157,7 @@ class SelfDiagnosisEngine:
             if local_ready:
                 return {
                     "status": "warning",
-                    "detail": "Local advisory runtime is ready, but no enabled cloud analysis advisors are configured.",
+                    "detail": "Local advisory runtime is ready as a fallback-only advisor; no enabled cloud analysis advisors are configured.",
                     "primary_provider": None,
                     "cloud_advisor_count": 0,
                     "connection_tested_count": 0,
