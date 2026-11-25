@@ -234,9 +234,13 @@ def run(interval_seconds: int = 300, symbols: list[str] | None = None, once: boo
                         _halt_state(db, halt_reason)
                         break
 
+                    # Binance's public kline endpoint can publish the latest fully closed
+                    # 5m candle a few seconds after its nominal close. Allow a small
+                    # transport/cache grace while still rejecting materially stale data.
+                    # This worker is Demo/Shadow only; live execution has its own guards.
                     result = orchestrator.run_cycle(
                         db, symbol=symbol, market=market, environment="demo", execute_shadow=True,
-                        max_data_age_seconds=300,
+                        max_data_age_seconds=360,
                         require_active_worker=True,
                     )
                     db.commit()
