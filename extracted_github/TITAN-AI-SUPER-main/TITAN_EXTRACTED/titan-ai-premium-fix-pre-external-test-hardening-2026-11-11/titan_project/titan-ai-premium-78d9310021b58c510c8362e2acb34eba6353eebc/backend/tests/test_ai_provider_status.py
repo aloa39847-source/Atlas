@@ -132,7 +132,9 @@ def test_decision_advisory_uses_local_fallback_when_openai_fails(monkeypatch):
     assert result["primary_provider"] == "local"
     assert result["fallback_used"] is True
     assert result["advisors"][0]["status"] == "unavailable"
-    assert result["advisors"][1]["status"] == "completed"
+    assert result["advisors"][1]["status"] == "unavailable"
+    assert result["advisors"][2]["status"] == "completed"
+    assert result["advisors"][2]["role"] == "fallback"
     assert result["action_authority"] == "none"
     assert result["decision_modified"] is False
 
