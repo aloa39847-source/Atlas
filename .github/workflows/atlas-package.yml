@@ -1,0 +1,47 @@
+name: ATLAS Final Source Package
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-final-package-main
+  cancel-in-progress: true
+
+env:
+  PROJECT_DIR: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+
+jobs:
+  package:
+    name: Build and verify one final project ZIP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Package all tracked project files, including recovered
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$PROJECT_DIR"
+          git ls-files "$PROJECT_DIR" | sed "s#^$PROJECT_DIR/##" | (
+            cd "$PROJECT_DIR"
+            zip -q -X "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" -@
+          )
+          test -s "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
+          unzip -t "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
+          file_count="$(unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | wc -l)"
+          test "$file_count" -gt 100
+          echo "ARCHIVE_FILE_COUNT=$file_count"
+          sha256sum "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
+      - name: Upload the single final ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ATLAS_AUTONOMOUS_TRADER_FINAL
+          path: ATLAS_AUTONOMOUS_TRADER_FINAL.zip
+          if-no-files-found: error
+          retention-days: 30
