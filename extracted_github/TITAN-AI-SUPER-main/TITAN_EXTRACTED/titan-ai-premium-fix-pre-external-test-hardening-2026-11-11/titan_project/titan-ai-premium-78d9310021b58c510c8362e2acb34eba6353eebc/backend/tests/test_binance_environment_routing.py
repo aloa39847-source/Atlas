@@ -308,3 +308,53 @@ def test_testnet_cancel_order_uses_signed_delete_and_exchange_order_identifier(m
         "symbol": "BTCUSDT", "orderId": 123,
         "origClientOrderId": "titan-client-123",
     })]
+
+
+def test_live_server_kill_switch_blocks_execution_even_after_user_confirmation(monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    state = SimpleNamespace(
+        account_target="live", market_type="spot",
+        live_confirmed_by_user=True, bot_run_state="running",
+        emergency_stop=False, risk_limits={},
+    )
+
+    class FakeDB:
+        def get(self, model, ident):
+            return state
+        def execute(self, *args, **kwargs):
+            raise AssertionError("Server Live kill switch must reject before any order lookup or exchange call")
+
+    result = binance_execution_service.execute_order(
+        FakeDB(), symbol="BTCUSDT", side="BUY", order_type="MARKET",
+        quantity=0.001, price=50000, idempotency_key="live-server-kill-switch-0001",
+        live_worker_ready=True,
+    )
+    assert result["ok"] is False
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "live_trading_disabled_by_server_configuration"
+
+
+def test_live_adapter_rejects_execution_when_server_kill_switch_is_off(monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+        live_confirmed_by_user=True, live_geo_eligible_confirmed=True,
+        live_kyc_confirmed=True, live_rate_limit_control_enabled=True,
+        live_worker_ready=True,
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    result = adapter._execution_ready()
+    assert result is not None
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "live_trading_disabled_by_server_configuration"
+
+
+def test_live_server_setting_defaults_to_disabled(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.delenv("TITAN_LIVE_TRADING_ENABLED", raising=False)
+    config = Settings()
+    assert config.live_trading_enabled is False
+    assert config.allow_demo_to_live_auto is False
+    assert config.allow_withdrawal_permissions is False
