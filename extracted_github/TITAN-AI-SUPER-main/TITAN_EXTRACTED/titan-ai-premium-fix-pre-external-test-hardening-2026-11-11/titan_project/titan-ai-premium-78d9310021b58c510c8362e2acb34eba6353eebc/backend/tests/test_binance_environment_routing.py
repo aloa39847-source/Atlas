@@ -309,3 +309,44 @@ def test_testnet_cancel_order_uses_signed_delete_and_exchange_order_identifier(m
         "symbol": "BTCUSDT", "orderId": 123,
         "origClientOrderId": "titan-client-123",
     })]
+
+
+def test_live_execution_readiness_needs_only_exchange_permissions_user_confirmation_and_worker(monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+        live_confirmed_by_user=True, live_worker_ready=True,
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    calls = []
+    def fake_request(method, path, signed=False, params=None):
+        calls.append((method, path, signed))
+        if path == "/api/v3/account":
+            return {"canTrade": True, "balances": []}
+        if path == "/sapi/v1/account/apiRestrictions":
+            return {"ipRestrict": True, "ipList": ["203.0.113.10"],
+                    "enableSpotAndMarginTrading": True,
+                    "enableWithdrawals": False, "enableInternalTransfer": False,
+                    "permitsUniversalTransfer": False}
+        raise AssertionError("Unexpected Live request")
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    status = adapter.status()
+    assert status["connected"] is True
+    assert status["trade_permission"] is True
+    assert status["permissions_verified"] is True
+    assert status["execution_ready"] is True
+    assert status["live_blocked"] is False
+    assert calls == [("GET", "/api/v3/account", True),
+                     ("GET", "/sapi/v1/account/apiRestrictions", True)]
+
+
+def test_live_adapter_does_not_require_extra_server_or_geo_kyc_environment_flags(monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+        live_confirmed_by_user=True, live_worker_ready=True,
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    assert adapter._execution_ready() is None
