@@ -266,6 +266,12 @@ class TitanCoreService:
                   live_confirm: bool | None = None) -> dict[str, Any]:
         s = self._state(db)
         old = self.get_state(db)
+        requested_live = (
+            str(account_target or "").strip().lower() == "live"
+            or str(environment_mode or "").strip().lower() == EnvironmentMode.LIVE.value
+        )
+        if requested_live and live_confirm is True and not bool(settings.live_trading_enabled):
+            raise ValueError("live_trading_disabled_by_server")
         if account_target:
             at = str(account_target).strip().lower()
             if at not in {"demo", "testnet", "live"}:
