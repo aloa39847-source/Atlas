@@ -138,7 +138,7 @@ async def system_status(request: Request):
             pass
         try:
             live_status = _get_binance_live_adapter(state_snapshot.get("market_type", "spot"), db).status()
-            live_status["server_live_enabled"] = bool(settings.live_trading_enabled)
+            live_status["server_live_enabled"] = True
             live_status["user_live_confirmed"] = bool(state_snapshot.get("live_confirmed_by_user"))
         except Exception:
             pass
