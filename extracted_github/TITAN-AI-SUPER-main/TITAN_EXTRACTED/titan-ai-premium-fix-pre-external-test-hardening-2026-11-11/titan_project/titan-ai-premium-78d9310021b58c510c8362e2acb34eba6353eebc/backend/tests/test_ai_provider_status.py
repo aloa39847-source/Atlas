@@ -95,7 +95,7 @@ def test_decision_advisory_invokes_all_enabled_analysis_advisors_without_trade_a
     assert [call[0] for call in calls] == ["openai", "deepseek"]
     assert all(call[1] == "analysis" for call in calls)
     assert "NO authority" in calls[0][2] and "TITAN owns the final decision" in calls[0][2]
-    assert result["advice_count"] == 1
+    assert result["advice_count"] == 2
     assert result["attempted_count"] == 2
     assert result["primary_provider"] == "openai"
     assert result["secondary_cloud_providers_ignored"] == 0
