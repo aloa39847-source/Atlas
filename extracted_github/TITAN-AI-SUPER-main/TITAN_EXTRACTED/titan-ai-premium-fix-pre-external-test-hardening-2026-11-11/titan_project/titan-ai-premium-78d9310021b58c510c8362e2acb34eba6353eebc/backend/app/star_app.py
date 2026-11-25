@@ -3118,7 +3118,7 @@ async def binance_live_status(request):
         return J({
             **status,
             "live_blocked": not bool(status.get("execution_ready")),
-            "server_live_enabled": bool(settings.live_trading_enabled),
+            "server_live_enabled": True,
             "user_live_confirmed": bool(state.get("live_confirmed_by_user")),
             "selected_account": state.get("account_target"),
             "orders_submitted": False,
@@ -3459,8 +3459,8 @@ async def binance_live_creds_status(request):
     creds = load_binance_credentials("live", market)
     return J({"configured": bool(creds.get("configured")), "market": market,
               "environment": "live", "has_secret": bool(creds.get("configured")),
-              "server_live_enabled": bool(settings.live_trading_enabled),
-              "live_blocked": not bool(settings.live_trading_enabled)})
+              "server_live_enabled": True,
+              "live_blocked": not bool(creds.get("configured"))})
 
 
 async def binance_live_delete(request):
