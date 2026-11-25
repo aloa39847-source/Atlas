@@ -73,6 +73,11 @@ jobs:
       - name: Run runtime and market stream tests
         working-directory: ${{ env.PROJECT_DIR }}/frontend
         run: npm run test:runtime
+      - name: Install pinned Playwright browser-test runtime
+        working-directory: ${{ env.PROJECT_DIR }}/frontend
+        run: |
+          npm install --no-save --package-lock=false playwright@1.65.1
+          npx playwright install --with-deps chromium
       - name: Run browser integration tests
         working-directory: ${{ env.PROJECT_DIR }}/frontend
         run: npm run test:browser
