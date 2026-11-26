@@ -589,6 +589,7 @@ class BinanceTestnetAdapter:
         pre = self.gateway.validate(
             symbol=symbol, market=market, side=side.lower(), order_type=order_type.lower(),
             quantity=quantity, price=price, reference_price=reference,
+            leverage=lev,
             environment_mode="live" if self.config.environment == "live" else "demo",
             live_enabled=self.config.environment == "live" and self.config.live_confirmed_by_user,
             idempotency_key=idempotency_key,
