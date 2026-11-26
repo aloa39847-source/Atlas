@@ -1,6 +1,12 @@
 name: Atlas Binance Spot Testnet Read-only Smoke Test
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/atlas-binance-spot-testnet-readonly.yml"
+      - "extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
+      - "extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/8ptblr.zip"
   workflow_dispatch:
     inputs:
       symbol:
@@ -19,11 +25,11 @@ concurrency:
 jobs:
   readonly-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
-      TITAN_TESTNET_SYMBOL: ${{ inputs.symbol }}
+      TITAN_TESTNET_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
       TITAN_BINANCE_PUBLIC_DATA_ENABLED: "true"
       TITAN_LIVE_TRADING_ENABLED: "false"
       BINANCE_TESTNET_MARKET: "spot"
@@ -46,7 +52,7 @@ jobs:
           DEST="$RUNNER_TEMP/atlas-spot-testnet-backend"
           mkdir -p "$DEST"
           python - "$ZIP" "$DEST" <<'PY'
-          import sys, zipfile
+          import os, sys, zipfile
           from pathlib import Path
           archive, dest = sys.argv[1:]
           with zipfile.ZipFile(archive) as z:
@@ -58,8 +64,8 @@ jobs:
                    if p.parent.name == "services" and p.parent.parent.name == "app"]
           if len(roots) != 1 or not (roots[0] / "requirements.txt").is_file():
               raise SystemExit("Could not uniquely locate the backend root")
-          with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"root={roots[0]}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"root={roots[0]}\\n")
           PY
 
       - name: Install backend dependencies
@@ -83,7 +89,7 @@ jobs:
           PYTHONPATH: ${{ steps.source.outputs.root }}
         run: |
           set -euo pipefail
-          python .github/scripts/titan_testnet_readonly_smoke.py
+          python "$GITHUB_WORKSPACE/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
 
       - name: Confirm no order submission occurred
         if: always()
