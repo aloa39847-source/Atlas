@@ -290,7 +290,12 @@ class BinanceTestnetAdapter:
                     result["trade_permission"] = None
                     result["api_key_trade_permission_verified"] = None
                     result["execution_ready"] = False
-                    result["execution_readiness_check"] = "api_key_trade_permission_requires_explicit_test_order_validation"
+                    result["execution_readiness_check"] = (
+                        "api_key_trade_permission_requires_explicit_test_order_validation"
+                        if result["account_can_trade"] else "binance_account_trading_disabled"
+                    )
+                    if not result["account_can_trade"]:
+                        result["permission_check"] = "binance_account_trading_disabled"
                 if environment == "live" and result["connected"]:
                     result["trade_permission"] = acct.get("canTrade") is True
                     permissions = self._request("GET", "/sapi/v1/account/apiRestrictions", signed=True)
