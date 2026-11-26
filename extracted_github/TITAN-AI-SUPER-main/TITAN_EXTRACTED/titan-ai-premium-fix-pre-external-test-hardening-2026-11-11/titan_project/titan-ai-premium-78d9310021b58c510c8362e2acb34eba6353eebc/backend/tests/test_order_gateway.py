@@ -150,15 +150,15 @@ def test_gateway_enforces_spot_100_usdt_per_trade_cap():
     assert result.normalized["max_notional"] == 100.0
 
 
-def test_gateway_enforces_futures_800_usdt_total_notional_cap():
+def test_gateway_enforces_futures_100_usdt_total_notional_cap():
     result = PreTradeOrderGateway().validate(
         symbol="BTC/USDT", market=MarketType.FUTURES, side="buy",
-        order_type="market", quantity=0.02, reference_price=50000,
+        order_type="market", quantity=0.003, reference_price=50000,
         leverage=10,
     )
     assert result.ok is False
     assert result.reason == "notional_exceeds_limit"
-    assert result.normalized["max_notional"] == 800.0
+    assert result.normalized["max_notional"] == 100.0
 
 
 def test_live_pretrade_requires_strong_idempotency_key_and_boolean_flag():
@@ -239,3 +239,14 @@ def test_gateway_rejects_verified_spot_close_flag_for_non_spot_or_non_sell():
     )
     assert futures.reason == "verified_position_close_spot_sell_only"
     assert spot_buy.reason == "verified_position_close_spot_sell_only"
+
+
+def test_gateway_allows_futures_order_at_exact_100_usdt_cap():
+    result = PreTradeOrderGateway().validate(
+        symbol="BTC/USDT", market=MarketType.FUTURES, side="buy",
+        order_type="market", quantity=0.002, reference_price=50000,
+        leverage=10,
+    )
+    assert result.ok is True
+    assert result.normalized["notional_estimate"] == 100.0
+    assert result.normalized["max_notional"] == 100.0
