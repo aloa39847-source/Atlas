@@ -189,7 +189,7 @@ class RiskEngine(Engine):
         try:
             market_trade_cap = float(
                 settings.max_spot_trade_notional if market == MarketType.SPOT
-                else settings.max_futures_trade_notional if market == MarketType.FUTURES
+                else min(settings.max_futures_trade_notional, settings.max_futures_trade_margin * lev) if market == MarketType.FUTURES
                 else 0.0
             )
         except (TypeError, ValueError, OverflowError):
