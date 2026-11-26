@@ -260,8 +260,21 @@ class BinanceTestnetAdapter:
                     acct = self._request("GET", "/fapi/v2/account", signed=True)
                 else:
                     acct = self._request("GET", "/api/v3/account", signed=True)
-                result["connected"] = isinstance(acct, dict) and "error" not in acct
-                result["account_check"] = "ok" if result["connected"] else "error"
+                if self.config.market == "futures":
+                    account_payload_valid = (
+                        isinstance(acct, dict) and "error" not in acct
+                        and isinstance(acct.get("assets"), list)
+                        and isinstance(acct.get("positions"), list)
+                        and isinstance(acct.get("canTrade"), bool)
+                    )
+                else:
+                    account_payload_valid = (
+                        isinstance(acct, dict) and "error" not in acct
+                        and isinstance(acct.get("balances"), list)
+                        and isinstance(acct.get("canTrade"), bool)
+                    )
+                result["connected"] = account_payload_valid
+                result["account_check"] = "ok" if account_payload_valid else "invalid_or_error_response"
                 if environment == "testnet" and result["connected"]:
                     result["trade_permission"] = acct.get("canTrade") is True
                     result["execution_ready"] = result["trade_permission"]
