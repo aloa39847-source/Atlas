@@ -282,10 +282,15 @@ class BinanceTestnetAdapter:
                 result["connected"] = account_payload_valid
                 result["account_check"] = "ok" if account_payload_valid else "invalid_or_error_response"
                 if environment == "testnet" and result["connected"]:
-                    result["trade_permission"] = acct.get("canTrade") is True
-                    result["execution_ready"] = result["trade_permission"]
-                    if not result["trade_permission"]:
-                        result["permission_check"] = "binance_api_key_trade_permission_missing"
+                    # canTrade is an account-level flag, not proof that this
+                    # specific API key has TRADE scope. Spot Testnet exposes no
+                    # SAPI permission endpoint, so read-only checks cannot verify
+                    # key-level trading permission.
+                    result["account_can_trade"] = acct.get("canTrade") is True
+                    result["trade_permission"] = None
+                    result["api_key_trade_permission_verified"] = None
+                    result["execution_ready"] = False
+                    result["execution_readiness_check"] = "api_key_trade_permission_requires_explicit_test_order_validation"
                 if environment == "live" and result["connected"]:
                     result["trade_permission"] = acct.get("canTrade") is True
                     permissions = self._request("GET", "/sapi/v1/account/apiRestrictions", signed=True)
