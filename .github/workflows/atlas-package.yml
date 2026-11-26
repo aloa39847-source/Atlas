@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: atlas-final-package-main
+  group: atlas-final-package-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -23,12 +26,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: Package all tracked project files, including recovered
+      - name: Package tracked project files, including recovered, without nested ZIPs
         shell: bash
         run: |
           set -euo pipefail
           test -d "$PROJECT_DIR"
-          git ls-files "$PROJECT_DIR" | sed "s#^$PROJECT_DIR/##" | (
+          git ls-files "$PROJECT_DIR" | grep -viE '\.zip$' | sed "s#^$PROJECT_DIR/##" | (
             cd "$PROJECT_DIR"
             zip -q -X "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" -@
           )
@@ -36,7 +39,17 @@ jobs:
           unzip -t "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
           file_count="$(unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | wc -l)"
           test "$file_count" -gt 100
+          if unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | grep -qiE '\.zip$'; then
+            echo "Unexpected nested ZIP found in final project archive" >&2
+            exit 1
+          fi
+          recovered_expected="$(git ls-files "$PROJECT_DIR/recovered" | wc -l)"
+          if [ "$recovered_expected" -gt 0 ]; then
+            recovered_actual="$(unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | grep -c '^recovered/' || true)"
+            test "$recovered_actual" -eq "$recovered_expected"
+          fi
           echo "ARCHIVE_FILE_COUNT=$file_count"
+          echo "RECOVERED_FILE_COUNT=$recovered_expected"
           sha256sum "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
       - name: Upload the single final ZIP
         uses: actions/upload-artifact@v4

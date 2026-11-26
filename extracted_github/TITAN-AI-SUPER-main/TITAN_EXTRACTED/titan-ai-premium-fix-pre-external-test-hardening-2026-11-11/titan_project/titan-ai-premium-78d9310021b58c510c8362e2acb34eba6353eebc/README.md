@@ -31,16 +31,15 @@ This workspace contains an **integrated, extensible foundation** for TITAN SUPER
 
 ## Verification
 
-Latest fully successful main-source CI snapshot: `242549d40dfa216187119539c3d1e74f173f7774` (2026-11-12). All three main-branch CI jobs passed, including 708 backend tests, frontend API/build/runtime checks, and production Docker build and smoke tests.
+Latest merged source: `8c08ab983879de62fde9ee6756450cd5407f8e6d` (2026-11-26).
 
-- **Backend:** 708 tests passed and Python compilation passed.
-- **Frontend:** API tests, Vite production build, and runtime smoke test passed.
-- **Android PWA:** installable standalone shell with 192×192 and 512×512 PNG icons plus the original scalable SVG. The service worker caches only the app shell/static assets and never caches authenticated or dynamic API responses; CI checks this policy and validates the PNG icon signatures/dimensions.
-- **Production container:** multi-stage Node/Python Docker image built successfully and booted in CI. The smoke test verified the mobile React terminal at `/`, the PWA manifest, both PNG icons, service worker, and `/api/health`.
-- **Render blueprint:** a root-level Blueprint is available for normal Render discovery, with the nested project Blueprint retained. The `rootDir` identifies the nested project, while Dockerfile/context paths are repository-root-relative. Render auto-deploy is gated on passing GitHub checks (`checksPass`). No Render deployment has been initiated from this repository connection.
-- **Market data:** Spot and USD-M Futures public candle adapters support all 15 project timeframes. Regression tests verify that the still-forming last candle is excluded and that insufficient completed-candle history fails closed.
-- **Risk and execution safety:** daily loss is capped at 7%; Spot and Futures per-trade notional caps are enforced; Binance Live HTTP transport is blocked at the adapter boundary. Remote AI-provider URLs require HTTPS, local model endpoints may use local HTTP, and external requests disable ambient proxies and refuse redirects. No Live request or order was submitted.
-- **Offline stability soak:** three independent 1,800-second Spot/Futures runs passed across six symbols and all 15 timeframes. Each run recorded zero network calls, zero exchange orders, and `live_trading=false`; traced-memory peak stayed at about 16.8 MB. Results: run #43128407005 — 42,480 analyses / 2,832 decisions; run #43128565302 — 31,860 analyses / 2,124 decisions; run #43128746031 — 42,300 analyses / 2,820 decisions. All three reports are retained as GitHub Actions artifacts: [run #43128407005](https://github.com/tatabntakchaba-max/TITAN-AI-SUPER/actions/runs/43128407005/artifacts/13904829396), [run #43128565302](https://github.com/tatabntakchaba-max/TITAN-AI-SUPER/actions/runs/43128565302/artifacts/13906360662), and [run #43128746031](https://github.com/tatabntakchaba-max/TITAN-AI-SUPER/actions/runs/43128746031/artifacts/13906050914). These are deterministic synthetic-data stability checks, not profitability or live-exchange tests.
+- **Pull-request CI:** run [#45744952405](https://github.com/aloa39847-source/Atlas/actions/runs/45744952405) completed successfully on the final reviewed PR head. All five jobs passed: backend compile/tests, frontend tests and production builds, production container build, full-cycle isolated Demo Shadow smoke (Spot + Futures), and the 10-minute Demo Shadow stability test.
+- **Main-branch package:** run [#45747602823](https://github.com/aloa39847-source/Atlas/actions/runs/45747602823) completed successfully after merge. It created and verified the single `ATLAS_AUTONOMOUS_TRADER_FINAL` ZIP artifact (SHA-256: `545369a8b9f3c286ae617d81ef711242d10a87bdf49b7e718279d2f01a17f11a`).
+- **Risk and execution safety:** daily loss is capped at 7%. Spot per-trade notional is capped at 100 USDT. Futures initial margin is capped at 30 USDT per entry; the strategy engine estimates leverage up to the hard 10x ceiling, and both the worker and independent pre-trade gateway enforce notional no greater than 30 USDT multiplied by the selected leverage (maximum 300 USDT). Binance Live remains gated by server configuration, explicit per-start user confirmation, credential/permission checks, and risk controls. No Live order was submitted.
+- **News freshness:** decision news context rejects missing, invalid, future-dated, or older-than-60-minute original publication timestamps.
+- **Strategy coverage:** the catalog includes standard and advanced strategy rules plus an ICT/SMC candidate model. ICT and data-dependent strategies remain partial where required market evidence is unavailable; registration does not imply every strategy has generated a valid live signal.
+
+These checks prove code/build/test behavior only. Demo Shadow smoke and stability runs are isolated internal simulations; they are not user-credentialed Binance Testnet order-lifecycle tests, profitability evidence, or Live trading validation.
 
 ### Not yet externally verified or production-ready
 
@@ -86,4 +85,4 @@ Vite proxies `/api` to `http://127.0.0.1:8000` by default.
 
 ## Reference and backup handling
 
-The immutable reference ZIP is kept at the repository root, outside this project directory. The release workflow packages only this project tree and excludes the root reference ZIP, nested ZIPs, recovered/old material, runtime data, credentials, databases, and build caches. The reference archive remains unchanged in the repository.
+The immutable reference ZIP remains at the repository root, outside this project directory. The release workflow packages tracked files from this project tree, includes the tracked `recovered/` material, and explicitly excludes nested ZIP archives. Untracked runtime data and credentials are not added because packaging uses `git ls-files`. The root reference archive remains unchanged.

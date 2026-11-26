@@ -147,8 +147,8 @@ class PreTradeOrderGateway:
         notional = (px or 0.0) * quantity
         configured_cap = (
             settings.max_spot_trade_notional if market == MarketType.SPOT
-            else settings.max_futures_trade_notional if market == MarketType.FUTURES
-            else 0.0
+            else min(settings.max_futures_trade_notional, settings.max_futures_trade_margin * leverage)
+            if market == MarketType.FUTURES else 0.0
         )
         effective_cap = configured_cap if max_notional is None else min(configured_cap, float(max_notional))
         # A validated Futures reduce-only close lowers an existing position;
@@ -283,7 +283,7 @@ class PreTradeOrderGateway:
         normalized = {
             "symbol": sym, "market": market.value, "side": sd, "order_type": ot,
             "quantity": quantity, "price": price, "reference_price": reference_price,
-            "notional_estimate": notional if px else None, "idempotency_key_present": bool(idempotency_key),
+            "notional_estimate": notional if px else None, "max_notional": effective_cap, "idempotency_key_present": bool(idempotency_key),
             "reduce_only": bool(reduce_only), "leverage": leverage,
             "exchange_filters_checked": filters_checked,
             "notional_cap_bypassed_for_reduce_only": reduce_only_exit,

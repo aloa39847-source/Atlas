@@ -20,7 +20,7 @@ def test_user_spot_trade_notional_is_capped_at_100_usdt():
     assert "per_trade_notional_cap_applied:100.00" in result["issues"]
 
 
-def test_user_futures_trade_notional_is_capped_at_800_usdt():
+def test_user_futures_trade_notional_is_capped_by_30_usdt_margin_at_5x():
     result = RiskEngine().validate_trade(
         environment=EnvironmentMode.DEMO,
         market=MarketType.FUTURES,
@@ -32,9 +32,9 @@ def test_user_futures_trade_notional_is_capped_at_800_usdt():
     )
 
     assert result["ok"] is True
-    assert result["position_notional_estimate"] == 800.0
-    assert result["quantity_estimate"] == 8.0
-    assert "per_trade_notional_cap_applied:800.00" in result["issues"]
+    assert result["position_notional_estimate"] == 150.0
+    assert result["quantity_estimate"] == 1.5
+    assert "per_trade_notional_cap_applied:150.00" in result["issues"]
 
 
 def test_daily_loss_cap_default_is_seven_percent():

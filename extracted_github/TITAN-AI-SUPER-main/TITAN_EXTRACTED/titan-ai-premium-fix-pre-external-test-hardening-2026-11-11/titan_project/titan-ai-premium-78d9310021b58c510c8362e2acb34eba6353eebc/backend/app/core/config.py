@@ -48,7 +48,8 @@ class Settings:
     max_risk_per_trade_cap: float = 0.02
     max_daily_loss_cap: float = 0.07
     max_spot_trade_notional: float = 100.0
-    max_futures_trade_notional: float = 800.0
+    max_futures_trade_notional: float = 300.0
+    max_futures_trade_margin: float = 30.0
     max_portfolio_exposure_multiple: float = 2.0
     max_open_positions_cap: int = 10
 

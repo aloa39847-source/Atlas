@@ -347,7 +347,17 @@ def _entry_notional_cap(target: str, market: str, leverage: float, remaining_exp
     """Return a per-entry notional ceiling; live cap is defined in margin terms."""
     if not math.isfinite(leverage) or leverage < 1 or not math.isfinite(remaining_exposure):
         return 0.0
-    per_entry_notional = settings.max_spot_trade_notional if market == "spot" else settings.max_futures_trade_notional
+    if market == "spot":
+        per_entry_notional = settings.max_spot_trade_notional
+    elif market == "futures":
+        # The hard ceiling is the $30 initial-margin budget multiplied by
+        # the leverage selected by the strategy engine, bounded by 10x/$300.
+        per_entry_notional = min(
+            settings.max_futures_trade_notional,
+            settings.max_futures_trade_margin * leverage,
+        )
+    else:
+        return 0.0
     return max(0.0, min(per_entry_notional, remaining_exposure))
 
 
@@ -408,13 +418,17 @@ def _open_signal(
     risk_cash = equity * _RISK_PER_TRADE
     quantity_by_risk = risk_cash / gap
     leverage_cap = _effective_futures_leverage_cap(risk_limits) if market == "futures" else 1.0
-    leverage = 1.0 if market == "spot" else max(1, min(math.floor(leverage_cap), int(float(item.get("leverage") or 3))))
-    # Live-account cap is initial margin per entry, not futures notional.
-    live_margin_cap = 20.0 if target == "live" else None
+    # Use the leverage estimated by the strategy engine; if it supplies no
+    # estimate, default to 1x rather than silently assuming a higher leverage.
+    leverage = 1.0 if market == "spot" else max(
+        1, min(math.floor(leverage_cap), int(float(item.get("leverage") or 1)))
+    )
+    # Hard initial-margin budget applies to every Futures environment.
+    futures_margin_cap = settings.max_futures_trade_margin if market == "futures" else None
     notional_cap = _entry_notional_cap(target, market, leverage, remaining_exposure)
     budget = min(notional_cap, available if market == "spot" else available * leverage)
-    if live_margin_cap is not None and market == "futures":
-        budget = min(budget, live_margin_cap * leverage)
+    if futures_margin_cap is not None:
+        budget = min(budget, futures_margin_cap * leverage)
     quantity = min(quantity_by_risk, budget / entry)
     filters = adapter._symbol_filters(symbol)
     quantity = _floor_step(quantity, float(filters.get("marketStepSize") or filters.get("stepSize") or 0))
@@ -436,7 +450,7 @@ def _open_signal(
             "confidence": item.get("confidence"), "reference_price": entry,
             "signal_action": action,
             "estimated_initial_margin_usdt": (notional / leverage) if market == "futures" else notional,
-            "live_per_trade_margin_cap_usdt": live_margin_cap,
+            "futures_per_trade_margin_cap_usdt": futures_margin_cap,
         },
     )
     if not result.get("ok") or not result.get("sent_to_exchange"):

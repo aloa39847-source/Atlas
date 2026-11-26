@@ -343,7 +343,7 @@ def test_futures_shadow_execution_is_simulated_and_leverage_bounded(tmp_path):
             idempotency_key="futures-shadow-over-cap-001", leverage=2,
         )
         assert not too_large.ok
-        assert too_large.message == "futures_position_notional_exceeds_limit"
+        assert too_large.message == "notional_exceeds_limit"
 
         spot_leverage = service.create_shadow_order(
             db, env="demo", market="spot", symbol="ETH/USDT", side="buy", order_type="market",
@@ -762,7 +762,7 @@ def test_futures_shadow_caps_aggregate_position_notional(tmp_path):
         db.commit()
         rejected = svc.create_shadow_order(
             db, env="demo", market="futures", symbol="ETH/USDT", side="buy",
-            order_type="limit", quantity=0.80, price=1000.0, reference_price=1000.0,
+            order_type="limit", quantity=0.30, price=1000.0, reference_price=1000.0,
             idempotency_key="futures-cap-add-002", leverage=10.0,
         )
         assert rejected.ok is False
@@ -1058,7 +1058,7 @@ def test_futures_reduce_only_close_survives_mark_appreciation_above_entry_cap(tm
         service = ShadowTradingService()
         opened = service.create_shadow_order(
             db, env="demo", market="futures", symbol="BTC/USDT", side="buy",
-            order_type="market", quantity=0.01, price=50000.0,
+            order_type="market", quantity=0.006, price=50000.0,
             reference_price=50000.0, idempotency_key="futures-close-appreciation-open",
             leverage=10,
         )
@@ -1076,7 +1076,7 @@ def test_futures_reduce_only_close_survives_mark_appreciation_above_entry_cap(tm
         assert db.get(PositionRecord, opened.position.id).status == "closed"
         exit_order = db.get(OrderRecord, closed["order_id"])
         assert exit_order.metadata_json["reduce_only"] is True
-        assert exit_order.quantity * exit_order.avg_fill_price == 900.0
+        assert exit_order.quantity * exit_order.avg_fill_price == 540.0
     finally:
         db.close()
 
