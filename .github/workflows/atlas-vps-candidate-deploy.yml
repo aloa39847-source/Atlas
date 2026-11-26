@@ -116,7 +116,7 @@ jobs:
 
           healthy() {
             for attempt in $(seq 1 30); do
-              if curl -fsS "http://127.0.0.1:$PORT/health" | grep -q '"ok":true'; then
+              if curl -fsS "http://127.0.0.1:$PORT/api/health" | grep -q '"ok":true'; then
                 return 0
               fi
               sleep 2
@@ -139,7 +139,7 @@ jobs:
           fi
 
           echo "CANDIDATE_DEPLOYED commit=$SHA port=$PORT"
-          curl -fsS "http://127.0.0.1:$PORT/health"
+          curl -fsS "http://127.0.0.1:$PORT/api/health"
           echo
           REMOTE
 
