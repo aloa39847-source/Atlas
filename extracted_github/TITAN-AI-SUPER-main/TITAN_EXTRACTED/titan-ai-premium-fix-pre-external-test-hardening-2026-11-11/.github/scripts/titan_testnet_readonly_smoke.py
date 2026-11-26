@@ -106,8 +106,9 @@ def main() -> int:
             "api_key_trade_permission_verified": None,
             "execution_ready": False,
             "execution_readiness_check": (
+                "account_authentication_not_verified" if not account_ok else
                 "api_key_trade_permission_requires_explicit_test_order_validation"
-                if account_ok else "account_authentication_not_verified"
+                if account.get("canTrade") is True else "binance_account_trading_disabled"
             ),
             "withdrawal_operations_supported": False,
             "diagnostic": diagnostic or ({"error": account_error} if account_error else {}),
