@@ -252,6 +252,7 @@ class BinanceTestnetAdapter:
             "market": self.config.market,
             "configured": configured,
             "base_url": self._base_url(),
+            "execution_ready": False,
             "withdrawal_permissions": False if environment == "testnet" else None,
             "transfer_permissions": False if environment == "testnet" else None,
             "live_blocked": environment == "live" and not (
