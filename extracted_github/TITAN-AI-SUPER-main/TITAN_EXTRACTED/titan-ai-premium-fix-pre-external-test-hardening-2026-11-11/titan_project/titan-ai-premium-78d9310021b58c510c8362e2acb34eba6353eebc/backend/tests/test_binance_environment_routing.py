@@ -21,6 +21,20 @@ def test_binance_adapter_selects_isolated_environment_endpoints():
     assert BinanceTestnetAdapter(BinanceConfig(environment="live", market="futures"))._base_url() == FUTURES_LIVE_BASE
 
 
+def test_live_trading_is_disabled_by_default_without_explicit_server_override(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.delenv("TITAN_LIVE_TRADING_ENABLED", raising=False)
+    assert Settings().live_trading_enabled is False
+
+
+def test_live_trading_can_only_be_enabled_by_explicit_server_override(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.setenv("TITAN_LIVE_TRADING_ENABLED", "true")
+    assert Settings().live_trading_enabled is True
+
+
 def test_live_execution_requires_server_enablement_user_confirmation_and_worker(monkeypatch):
     monkeypatch.setattr(settings, "live_trading_enabled", True)
     adapter = BinanceTestnetAdapter(BinanceConfig(
