@@ -547,6 +547,41 @@ class TitanCoreService:
         return list_strategies()
 
     @staticmethod
+    def _build_strategy_context(symbol: str, market: MarketType, data_source: str) -> dict[str, Any]:
+        """Build optional, provenance-checked public derivatives context for strategy candidates."""
+        if market != MarketType.FUTURES or data_source != "binance_public":
+            return {}
+        try:
+            from app.data.binance_futures_public import BinanceFuturesPublicData
+
+            snapshot = BinanceFuturesPublicData().get_mark_price(symbol)
+            raw_rate = snapshot.get("last_funding_rate")
+            raw_stamp = snapshot.get("time")
+            if isinstance(raw_rate, bool) or isinstance(raw_stamp, bool):
+                return {}
+            rate = float(raw_rate)
+            stamp_ms = float(raw_stamp)
+            now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+            if (not math.isfinite(rate) or abs(rate) > 0.05
+                    or not math.isfinite(stamp_ms) or stamp_ms <= 0
+                    or now_ms - stamp_ms < -60_000 or now_ms - stamp_ms > 120_000):
+                return {}
+            published = datetime.fromtimestamp(stamp_ms / 1000.0, timezone.utc).isoformat()
+            return {
+                "funding_rate": {
+                    "ok": True,
+                    "source": "binance_futures_public_read_only",
+                    "symbol": str(snapshot.get("symbol") or symbol).replace("/", "").upper(),
+                    "fetched_at": published,
+                    "funding_rate": rate,
+                }
+            }
+        except Exception:
+            # Missing public context must suppress the strategy, never block the
+            # deterministic market/risk pipeline or invent a funding signal.
+            return {}
+
+    @staticmethod
     def _validate_public_market_batches(market_batches: dict, expected_market: str = "spot") -> None:
         """Fail closed if any required public timeframe is missing, stale, or malformed."""
         required = {
@@ -666,6 +701,7 @@ class TitanCoreService:
             news_context = {"ok": False, "error": "news_context_invalid"}
         from app.learning.outcomes import build_strategy_memory_context
         strategy_memory = build_strategy_memory_context(db)
+        strategy_context = self._build_strategy_context(symbol, market, data_source)
         result = self.decision.decide(
             symbol=symbol, market=market, environment=env,
             timeframe_analyses={Timeframe(k): v for k, v in analyses.items()},
@@ -674,6 +710,7 @@ class TitanCoreService:
             open_positions=len(open_positions), current_exposure=current_exposure,
             max_exposure=max_portfolio_exposure, max_open_positions=max_open_positions,
             news_context=news_context, strategy_memory=strategy_memory,
+            strategy_context=strategy_context,
         )
         # Optional external LLM review is strictly advisory and runs only when an
         # enabled provider is configured. It cannot alter the deterministic action
