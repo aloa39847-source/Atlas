@@ -409,3 +409,47 @@ def test_futures_open_interest_history_rejects_invalid_or_duplicate_rows(monkeyp
     ])
     with pytest.raises(RuntimeError, match="duplicate_open_interest"):
         adapter.get_open_interest_history("BTCUSDT", period="5m", limit=2)
+
+
+def test_open_interest_context_uses_closed_candles_and_computes_divergence(monkeypatch):
+    from datetime import datetime, timezone
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+    adapter = binance_futures_public.BinanceFuturesPublicData()
+    monkeypatch.setattr(binance_futures_public, "BinanceFuturesPublicData", lambda: adapter)
+    monkeypatch.setattr(adapter, "get_open_interest_history", lambda *args, **kwargs: [
+        {"symbol": "BTCUSDT", "timestamp": int(now_ms - 300000), "open_interest": 100.0},
+        {"symbol": "BTCUSDT", "timestamp": int(now_ms - 1000), "open_interest": 102.0},
+    ])
+    monkeypatch.setattr(adapter, "get_klines", lambda *args, **kwargs: [
+        [0, "100", "101", "99", "100", "1", int(now_ms - 600000)],
+        [0, "100", "102", "99", "101", "1", int(now_ms - 300000)],
+        [0, "101", "103", "100", "102", "1", int(now_ms + 300000)],
+    ])
+    context = TitanCoreService._build_open_interest_strategy_context(
+        "BTCUSDT", MarketType.FUTURES, "binance_public"
+    )
+    oi = context["open_interest"]
+    assert oi["open_interest_change_pct"] == 2.0
+    assert oi["price_change_pct"] > 0
+    assert oi["direction"] == "bearish"
+    assert oi["window"] == "two_latest_closed_5m_candles"
+
+
+def test_open_interest_context_is_futures_only_and_fails_closed(monkeypatch):
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Futures public adapter must not be called")
+    monkeypatch.setattr(binance_futures_public.BinanceFuturesPublicData, "get_open_interest_history", unexpected)
+    assert TitanCoreService._build_open_interest_strategy_context(
+        "BTCUSDT", MarketType.SPOT, "binance_public"
+    ) == {}
+    assert TitanCoreService._build_open_interest_strategy_context(
+        "BTCUSDT", MarketType.FUTURES, "synthetic"
+    ) == {}
