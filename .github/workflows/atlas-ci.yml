@@ -3,6 +3,7 @@ name: ATLAS Autonomous Trader CI
 on:
   push:
     branches:
+      - main
       - "atlas/**"
   pull_request:
     branches:
