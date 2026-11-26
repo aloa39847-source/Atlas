@@ -249,7 +249,9 @@ class BinanceTestnetAdapter:
             "base_url": self._base_url(),
             "withdrawal_permissions": False,
             "live_blocked": environment == "live" and not (
-                self.config.live_confirmed_by_user and self.config.live_worker_ready
+                settings.live_trading_enabled
+                and self.config.live_confirmed_by_user
+                and self.config.live_worker_ready
             ),
         }
         if configured:
@@ -292,6 +294,7 @@ class BinanceTestnetAdapter:
                         result["execution_ready"] = bool(
                             result["connected"] and result.get("trade_permission") is True
                             and restriction_error is None
+                            and settings.live_trading_enabled
                             and self.config.live_confirmed_by_user and self.config.live_worker_ready
                         )
             except Exception as e:
