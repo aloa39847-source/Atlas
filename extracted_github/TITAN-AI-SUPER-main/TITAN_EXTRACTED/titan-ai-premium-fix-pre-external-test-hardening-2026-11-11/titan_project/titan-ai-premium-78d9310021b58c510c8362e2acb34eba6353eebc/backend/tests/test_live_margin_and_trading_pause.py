@@ -15,8 +15,8 @@ def test_spot_entry_uses_approved_100_usdt_notional_cap():
     assert _entry_notional_cap("live", "spot", 1, 500) == 100
 
 
-def test_futures_entry_respects_800_usdt_cap_and_remaining_exposure():
-    assert _entry_notional_cap("live", "futures", 5, 500) == 500
+def test_futures_entry_respects_30_usdt_margin_cap_and_remaining_exposure():
+    assert _entry_notional_cap("live", "futures", 5, 500) == 150
     assert _entry_notional_cap("live", "futures", 5, 500) <= settings.max_futures_trade_notional
 
 
@@ -27,7 +27,7 @@ def test_futures_entry_respects_lower_remaining_portfolio_exposure():
 def test_spot_and_futures_caps_are_consistent_across_accounts():
     assert _entry_notional_cap("demo", "spot", 1, 500) == 100
     assert _entry_notional_cap("testnet", "spot", 1, 500) == 100
-    assert _entry_notional_cap("testnet", "futures", 10, 1000) == 800
+    assert _entry_notional_cap("testnet", "futures", 10, 1000) == 300
 
 
 def test_paused_trading_blocks_new_entries_without_touching_exchange():
