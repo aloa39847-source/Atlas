@@ -53,7 +53,10 @@ def test_local_model_status_reports_not_enabled_without_external_calls(monkeypat
 
 def test_official_news_feeds_are_allowlisted_and_tagged_primary():
     primary = [feed for feed in public_news.NEWS_FEEDS if feed.get("source_type") == "official_primary"]
-    assert {feed["name"] for feed in primary} >= {"SEC Press Releases", "Ethereum Foundation"}
+    assert {feed["name"] for feed in primary} >= {
+        "SEC Press Releases", "Federal Reserve Press Releases",
+        "Bureau of Labor Statistics", "Ethereum Foundation",
+    }
     assert all(feed["url"].startswith("https://") for feed in primary)
     assert all(feed["url"] in {item["url"] for item in public_news.NEWS_FEEDS} for feed in primary)
 
