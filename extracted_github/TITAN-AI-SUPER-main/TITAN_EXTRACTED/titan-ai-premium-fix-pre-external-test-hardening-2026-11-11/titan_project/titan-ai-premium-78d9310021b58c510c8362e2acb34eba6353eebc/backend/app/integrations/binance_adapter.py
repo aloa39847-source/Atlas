@@ -835,11 +835,11 @@ class BinanceTestnetAdapter:
                 "live": self.config.environment == "live"}
 
     def get_exchange_info(self, symbol: str | None = None) -> dict[str, Any]:
-        params = {}
-        if symbol:
-            params["symbol"] = symbol.replace("/", "")
         if self.config.market == "futures":
-            return self._request("GET", "/fapi/v1/exchangeInfo", signed=False, params=params)
+            # USD-M Futures exchangeInfo has no symbol query parameter.
+            # Fetch the full rules document and select the symbol locally.
+            return self._request("GET", "/fapi/v1/exchangeInfo", signed=False)
+        params = {"symbol": symbol.replace("/", "")} if symbol else {}
         return self._request("GET", "/api/v3/exchangeInfo", signed=False, params=params)
 
     def reconcile(self, local_open_orders: list[dict] | None = None) -> dict[str, Any]:
