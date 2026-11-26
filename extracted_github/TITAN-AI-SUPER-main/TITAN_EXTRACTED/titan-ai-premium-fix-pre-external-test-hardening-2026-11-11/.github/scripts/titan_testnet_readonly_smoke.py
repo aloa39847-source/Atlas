@@ -161,6 +161,7 @@ def main() -> int:
     futures_valid = len(futures_match) == 1 and futures_match[0].get("status") == "TRADING"
     report["futures_testnet_exchange_info"] = {
         "ok": futures_valid,
+        "base_url": futures_adapter._base_url(),
         "symbol": symbol if futures_valid else None,
         "status": futures_match[0].get("status") if len(futures_match) == 1 else None,
         "error": None if futures_valid else "futures_testnet_symbol_missing_or_not_trading",
