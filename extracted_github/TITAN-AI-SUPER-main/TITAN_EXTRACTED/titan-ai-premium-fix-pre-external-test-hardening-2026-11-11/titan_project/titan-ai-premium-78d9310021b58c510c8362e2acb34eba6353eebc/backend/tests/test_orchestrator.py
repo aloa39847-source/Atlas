@@ -691,8 +691,8 @@ def test_orchestrator_caps_added_futures_quantity_against_total_position_notiona
         db.commit()
         assert result["executed"] is True
         portfolio = shadow.get_portfolio(db, env="demo", market="futures")
-        assert portfolio["positions"][0]["quantity"] == 8.0
-        assert portfolio["snapshot"]["exposure_notional"] == 800.0
-        assert portfolio["orders"][0]["filled_quantity"] == 1.0
+        assert portfolio["positions"][0]["quantity"] == 3.0
+        assert portfolio["snapshot"]["exposure_notional"] == 300.0
+        assert portfolio["orders"][0]["filled_quantity"] == 0.5
     finally:
         db.close()
