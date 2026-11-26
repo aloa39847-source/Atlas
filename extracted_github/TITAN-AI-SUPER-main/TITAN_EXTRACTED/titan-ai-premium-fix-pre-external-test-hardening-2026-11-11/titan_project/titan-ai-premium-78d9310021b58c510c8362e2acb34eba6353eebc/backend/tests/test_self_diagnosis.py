@@ -208,3 +208,32 @@ def test_strategy_diagnostics_accepts_unique_implemented_strategies(monkeypatch)
     result = SelfDiagnosisEngine()._check_strategies(None)
     assert result["status"] == "ok"
     assert result["verified_complete_count"] == 2
+
+
+def test_news_source_diagnostics_reports_official_and_secondary_feeds(monkeypatch):
+    from app.data import public_news
+
+    monkeypatch.setattr(public_news, "NEWS_FEEDS", (
+        {"name": "Official", "url": "https://official.example/rss", "source_type": "official_primary"},
+        {"name": "Secondary", "url": "https://media.example/rss", "source_type": "secondary_media"},
+    ))
+    result = SelfDiagnosisEngine()._check_news_sources()
+    assert result["status"] == "ok"
+    assert result["feed_count"] == 2
+    assert result["official_source_count"] == 1
+    assert result["secondary_source_count"] == 1
+    assert result["network_checked"] is False
+
+
+def test_news_source_diagnostics_rejects_duplicate_or_insecure_feed_urls(monkeypatch):
+    from app.data import public_news
+
+    monkeypatch.setattr(public_news, "NEWS_FEEDS", (
+        {"name": "Official", "url": "https://official.example/rss", "source_type": "official_primary"},
+        {"name": "Duplicate", "url": "https://official.example/rss", "source_type": "secondary_media"},
+        {"name": "Insecure", "url": "http://media.example/rss", "source_type": "secondary_media"},
+    ))
+    result = SelfDiagnosisEngine()._check_news_sources()
+    assert result["status"] == "error"
+    assert result["invalid_url_count"] == 1
+    assert result["duplicate_urls"] == ["https://official.example/rss"]
