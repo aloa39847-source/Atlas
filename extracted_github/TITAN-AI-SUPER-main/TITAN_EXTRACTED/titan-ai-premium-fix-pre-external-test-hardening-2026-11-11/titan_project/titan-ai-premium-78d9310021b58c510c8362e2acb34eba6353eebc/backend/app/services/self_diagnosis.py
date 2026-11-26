@@ -42,6 +42,7 @@ class SelfDiagnosisEngine:
             ("knowledge", lambda: self._check_knowledge(db)),
             ("learning", lambda: self._check_learning(db)),
             ("ai_providers", lambda: self._check_ai_providers(db)),
+            ("news_sources", self._check_news_sources),
             ("strategies", lambda: self._check_strategies(db)),
             ("decisions", lambda: self._check_decisions(db)),
             ("engines", lambda: self._check_engines(db)),
@@ -175,11 +176,98 @@ class SelfDiagnosisEngine:
         except Exception as e:
             return {"status": "error", "detail": str(e)}
 
+    def _check_news_sources(self) -> dict[str, Any]:
+        """Validate the configured official/secondary news source catalogue without network calls."""
+        try:
+            from app.data.public_news import NEWS_FEEDS
+
+            if not isinstance(NEWS_FEEDS, (list, tuple)) or not NEWS_FEEDS:
+                return {"status": "error", "detail": "No public news feeds are configured."}
+            urls = [str(item.get("url") or "").strip() for item in NEWS_FEEDS if isinstance(item, dict)]
+            invalid = [url for url in urls if not url.startswith("https://")]
+            duplicates = sorted({url for url in urls if urls.count(url) > 1})
+            official = [
+                item for item in NEWS_FEEDS
+                if isinstance(item, dict) and item.get("source_type") == "official_primary"
+            ]
+            secondary = [
+                item for item in NEWS_FEEDS
+                if isinstance(item, dict) and item.get("source_type") == "secondary_media"
+            ]
+            if len(urls) != len(NEWS_FEEDS) or invalid or duplicates or not official:
+                return {
+                    "status": "error",
+                    "detail": "News source catalogue contains invalid entries, non-HTTPS URLs, duplicates, or no official primary sources.",
+                    "invalid_url_count": len(invalid),
+                    "duplicate_urls": duplicates[:10],
+                    "official_source_count": len(official),
+                }
+            return {
+                "status": "ok",
+                "detail": (
+                    f"{len(NEWS_FEEDS)} allowlisted HTTPS news feeds configured "
+                    f"({len(official)} official primary, {len(secondary)} secondary); network connectivity not tested."
+                ),
+                "feed_count": len(NEWS_FEEDS),
+                "official_source_count": len(official),
+                "secondary_source_count": len(secondary),
+                "network_checked": False,
+            }
+        except Exception as e:
+            return {"status": "error", "detail": str(e)}
+
     def _check_strategies(self, db) -> dict[str, Any]:
+        """Check strategy registry integrity and report maturity without overstating completion."""
         try:
             from app.services.core_service import core_service
-            strs = core_service.strategies()
-            return {"status": "ok", "detail": f"{len(strs)} strategies"}
+
+            strategies = core_service.strategies()
+            if not strategies:
+                return {"status": "error", "detail": "No trading strategies are registered."}
+
+            maturity_counts: dict[str, int] = {}
+            duplicate_keys: list[str] = []
+            seen_keys: set[str] = set()
+            invalid_entries: list[str] = []
+            for item in strategies:
+                if not isinstance(item, dict):
+                    invalid_entries.append("non_object_strategy")
+                    continue
+                key = str(item.get("key") or "").strip()
+                maturity = str(item.get("status") or "unknown").strip().lower()
+                if not key:
+                    invalid_entries.append("strategy_missing_key")
+                elif key in seen_keys:
+                    duplicate_keys.append(key)
+                seen_keys.add(key)
+                maturity_counts[maturity] = maturity_counts.get(maturity, 0) + 1
+                if maturity not in {"implemented", "ready"}:
+                    invalid_entries.append(f"{key or 'unknown'}:{maturity}")
+
+            if duplicate_keys or invalid_entries:
+                return {
+                    "status": "error" if duplicate_keys or any(
+                        entry.endswith(":unknown") or entry.endswith(":not_implemented")
+                        for entry in invalid_entries
+                    ) else "warning",
+                    "detail": (
+                        f"{len(strategies)} strategies registered; "
+                        f"{len(duplicate_keys)} duplicate keys; "
+                        f"{len(invalid_entries)} partial, unverified, or invalid entries."
+                    ),
+                    "maturity_counts": maturity_counts,
+                    "duplicate_keys": sorted(set(duplicate_keys)),
+                    "partial_or_invalid": invalid_entries[:30],
+                    "verified_complete_count": maturity_counts.get("implemented", 0) + maturity_counts.get("ready", 0),
+                }
+
+            return {
+                "status": "ok",
+                "detail": f"{len(strategies)} registered strategies have unique keys and implemented status.",
+                "maturity_counts": maturity_counts,
+                "verified_complete_count": len(strategies),
+                "partial_or_invalid": [],
+            }
         except Exception as e:
             return {"status": "error", "detail": str(e)}
 

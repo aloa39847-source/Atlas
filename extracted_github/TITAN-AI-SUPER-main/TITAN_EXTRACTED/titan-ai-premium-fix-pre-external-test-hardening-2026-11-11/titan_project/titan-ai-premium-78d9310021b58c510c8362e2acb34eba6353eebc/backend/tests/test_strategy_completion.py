@@ -263,3 +263,193 @@ def test_breakout_smc_countertrend_requires_same_direction_choch():
     assert BacktestEngine._strategy_action("breakout_structure",analysis) is None
     analysis.structure["bos_choch"]=[{"type":"CHOCH","direction":"bullish"}]
     assert BacktestEngine._strategy_action("breakout_structure",analysis)=="buy"
+
+
+def test_futures_strategy_context_uses_fresh_public_funding_data(monkeypatch):
+    from datetime import datetime, timezone
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+    monkeypatch.setattr(
+        binance_futures_public.BinanceFuturesPublicData,
+        "get_mark_price",
+        lambda self, symbol: {
+            "symbol": "BTCUSDT", "last_funding_rate": 0.0002,
+            "time": now_ms, "source": "binance_usdm_futures_public_read_only",
+        },
+    )
+    context = TitanCoreService._build_strategy_context("BTC/USDT", MarketType.FUTURES, "binance_public")
+    funding = context["funding_rate"]
+    assert funding["ok"] is True
+    assert funding["source"] == "binance_futures_public_read_only"
+    assert funding["symbol"] == "BTCUSDT"
+    assert funding["funding_rate"] == 0.0002
+    assert datetime.fromisoformat(funding["fetched_at"]).tzinfo is not None
+
+
+def test_futures_strategy_context_fails_closed_for_spot_or_synthetic_data(monkeypatch):
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("public Futures adapter must not be called")
+    monkeypatch.setattr(binance_futures_public.BinanceFuturesPublicData, "get_mark_price", unexpected_call)
+    assert TitanCoreService._build_strategy_context("BTC/USDT", MarketType.SPOT, "binance_public") == {}
+    assert TitanCoreService._build_strategy_context("BTC/USDT", MarketType.FUTURES, "synthetic") == {}
+
+
+def test_futures_strategy_context_rejects_stale_funding_snapshot(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    stale_ms = (datetime.now(timezone.utc) - timedelta(minutes=3)).timestamp() * 1000.0
+    monkeypatch.setattr(
+        binance_futures_public.BinanceFuturesPublicData,
+        "get_mark_price",
+        lambda self, symbol: {
+            "symbol": "BTCUSDT", "last_funding_rate": 0.0002,
+            "time": stale_ms, "source": "binance_usdm_futures_public_read_only",
+        },
+    )
+    assert TitanCoreService._build_strategy_context("BTC/USDT", MarketType.FUTURES, "binance_public") == {}
+
+
+def test_fresh_futures_funding_context_qualifies_contrarian_strategy():
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    context = {
+        "funding_rate": {
+            "ok": True,
+            "source": "binance_futures_public_read_only",
+            "symbol": "BTCUSDT",
+            "fetched_at": now.isoformat(),
+            "funding_rate": 0.0002,
+        }
+    }
+    result = evaluate_strategy_candidates(
+        MarketType.FUTURES, "bearish", {}, strategy_context=context,
+        expected_symbol="BTCUSDT",
+    )
+    funding = next(item for item in result["candidates"] if item["key"] == "funding_rate")
+    assert funding["qualified"] is True
+    assert funding["direction"] == "bearish"
+    assert "fresh_funding_rate" in funding["evidence"]
+
+
+def test_cvd_strategy_context_requires_fresh_coherent_public_trade_window():
+    from datetime import datetime, timedelta, timezone
+    from app.services.core_service import TitanCoreService
+
+    now = datetime.now(timezone.utc)
+    snapshot = {
+        "ok": True, "source": "binance_public_read_only", "symbol": "BTCUSDT",
+        "taker_flow_delta_quote": 1250.5,
+        "first_trade_time": (now - timedelta(seconds=30)).isoformat(),
+        "last_trade_time": (now - timedelta(seconds=2)).isoformat(),
+    }
+    result = TitanCoreService._build_cvd_strategy_context(snapshot)
+    cvd = result["cumulative_volume_delta"]
+    assert cvd["cvd_change"] == 1250.5
+    assert cvd["window"] == "recent_public_aggregate_trades"
+
+    stale = {**snapshot, "last_trade_time": (now - timedelta(minutes=3)).isoformat()}
+    assert TitanCoreService._build_cvd_strategy_context(stale) == {}
+
+    wrong_source = {**snapshot, "source": "synthetic"}
+    assert TitanCoreService._build_cvd_strategy_context(wrong_source) == {}
+
+
+def test_fresh_public_cvd_context_qualifies_cvd_strategy():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    context = {
+        "cumulative_volume_delta": {
+            "ok": True, "source": "binance_public_read_only", "symbol": "BTCUSDT",
+            "fetched_at": (now - timedelta(seconds=1)).isoformat(),
+            "cvd_change": 1250.5,
+        }
+    }
+    result = evaluate_strategy_candidates(
+        MarketType.SPOT, "bullish", {}, strategy_context=context,
+        expected_symbol="BTCUSDT",
+    )
+    cvd = next(item for item in result["candidates"] if item["key"] == "cumulative_volume_delta")
+    assert cvd["qualified"] is True
+    assert cvd["direction"] == "bullish"
+
+
+def test_futures_open_interest_history_validates_and_sorts_rows(monkeypatch):
+    from app.data.binance_futures_public import BinanceFuturesPublicData
+
+    adapter = BinanceFuturesPublicData()
+    monkeypatch.setattr(adapter, "_get_json", lambda endpoint: [
+        {"timestamp": 2000, "sumOpenInterest": "120", "sumOpenInterestValue": "7200000"},
+        {"timestamp": 1000, "sumOpenInterest": "100", "sumOpenInterestValue": "6000000"},
+    ])
+    rows = adapter.get_open_interest_history("BTCUSDT", period="5m", limit=2)
+    assert [row["timestamp"] for row in rows] == [1000, 2000]
+    assert rows[-1]["source"] == "binance_futures_public_read_only"
+
+
+def test_futures_open_interest_history_rejects_invalid_or_duplicate_rows(monkeypatch):
+    import pytest
+    from app.data.binance_futures_public import BinanceFuturesPublicData
+
+    adapter = BinanceFuturesPublicData()
+    monkeypatch.setattr(adapter, "_get_json", lambda endpoint: [
+        {"timestamp": 1000, "sumOpenInterest": "100", "sumOpenInterestValue": "6000000"},
+        {"timestamp": 1000, "sumOpenInterest": "120", "sumOpenInterestValue": "7200000"},
+    ])
+    with pytest.raises(RuntimeError, match="duplicate_open_interest"):
+        adapter.get_open_interest_history("BTCUSDT", period="5m", limit=2)
+
+
+def test_open_interest_context_uses_closed_candles_and_computes_divergence(monkeypatch):
+    from datetime import datetime, timezone
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+    adapter = binance_futures_public.BinanceFuturesPublicData()
+    monkeypatch.setattr(binance_futures_public, "BinanceFuturesPublicData", lambda: adapter)
+    monkeypatch.setattr(adapter, "get_open_interest_history", lambda *args, **kwargs: [
+        {"symbol": "BTCUSDT", "timestamp": int(now_ms - 300000), "open_interest": 100.0},
+        {"symbol": "BTCUSDT", "timestamp": int(now_ms - 1000), "open_interest": 102.0},
+    ])
+    monkeypatch.setattr(adapter, "get_klines", lambda *args, **kwargs: [
+        [0, "100", "101", "99", "100", "1", int(now_ms - 600000)],
+        [0, "100", "102", "99", "101", "1", int(now_ms - 300000)],
+        [0, "101", "103", "100", "102", "1", int(now_ms + 300000)],
+    ])
+    context = TitanCoreService._build_open_interest_strategy_context(
+        "BTCUSDT", MarketType.FUTURES, "binance_public"
+    )
+    oi = context["open_interest"]
+    assert abs(oi["open_interest_change_pct"] - 2.0) < 1e-9
+    assert oi["price_change_pct"] > 0
+    assert oi["direction"] == "bearish"
+    assert oi["window"] == "two_latest_closed_5m_candles"
+
+
+def test_open_interest_context_is_futures_only_and_fails_closed(monkeypatch):
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Futures public adapter must not be called")
+    monkeypatch.setattr(binance_futures_public.BinanceFuturesPublicData, "get_open_interest_history", unexpected)
+    assert TitanCoreService._build_open_interest_strategy_context(
+        "BTCUSDT", MarketType.SPOT, "binance_public"
+    ) == {}
+    assert TitanCoreService._build_open_interest_strategy_context(
+        "BTCUSDT", MarketType.FUTURES, "synthetic"
+    ) == {}

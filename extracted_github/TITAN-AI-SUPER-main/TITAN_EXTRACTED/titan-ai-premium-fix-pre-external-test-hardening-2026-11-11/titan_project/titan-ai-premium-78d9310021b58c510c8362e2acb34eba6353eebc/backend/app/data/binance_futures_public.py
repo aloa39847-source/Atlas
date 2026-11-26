@@ -180,6 +180,44 @@ class BinanceFuturesPublicData:
             raise RuntimeError("binance_futures_public_duplicate_funding_timestamps")
         return output
 
+    def get_open_interest_history(self, symbol: str, period: str = "5m", limit: int = 12) -> list[dict]:
+        """Return bounded public USD-M open-interest history (no authentication)."""
+        normalized = self._symbol(symbol)
+        allowed_periods = {"5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"}
+        if (period not in allowed_periods or isinstance(limit, bool)
+                or not isinstance(limit, int) or not 2 <= limit <= 500):
+            raise ValueError("invalid_futures_open_interest_history_range")
+        data = self._get_json("/futures/data/openInterestHist?" + urlencode({
+            "symbol": normalized, "period": period, "limit": limit,
+        }))
+        if not isinstance(data, list) or len(data) < 2:
+            raise RuntimeError("binance_futures_public_insufficient_open_interest_history")
+        output = []
+        for row in data:
+            if not isinstance(row, dict) or any(
+                isinstance(row.get(key), bool)
+                for key in ("timestamp", "sumOpenInterest", "sumOpenInterestValue")
+            ):
+                raise RuntimeError("binance_futures_public_invalid_open_interest_row")
+            try:
+                stamp = int(row["timestamp"])
+                quantity = float(row["sumOpenInterest"])
+                value = float(row["sumOpenInterestValue"])
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("binance_futures_public_invalid_open_interest_row") from exc
+            if (stamp <= 0 or not math.isfinite(quantity) or not math.isfinite(value)
+                    or quantity <= 0 or value <= 0):
+                raise RuntimeError("binance_futures_public_invalid_open_interest_row")
+            output.append({
+                "symbol": normalized, "timestamp": stamp,
+                "open_interest": quantity, "open_interest_value": value,
+                "source": "binance_futures_public_read_only",
+            })
+        output.sort(key=lambda item: item["timestamp"])
+        if any(output[i]["timestamp"] <= output[i - 1]["timestamp"] for i in range(1, len(output))):
+            raise RuntimeError("binance_futures_public_duplicate_open_interest_timestamps")
+        return output
+
     def get_mark_prices(self, symbols: set[str]) -> dict[str, float]:
         if not symbols:
             return {}

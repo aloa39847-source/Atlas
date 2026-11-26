@@ -166,3 +166,74 @@ def test_ai_diagnostics_does_not_let_tested_secondary_mask_untested_primary(monk
     result = SelfDiagnosisEngine()._check_ai_providers(None)
     assert result["status"] == "warning"
     assert "connection test" in result["detail"]
+
+
+def test_strategy_diagnostics_reports_partial_registry_maturity(monkeypatch):
+    from app.services.core_service import core_service
+
+    monkeypatch.setattr(core_service, "strategies", lambda: [
+        {"key": "trend_following_ema", "status": "implemented"},
+        {"key": "ict_smc_model", "status": "implemented_partial"},
+        {"key": "funding_rate", "status": "implemented_partial"},
+    ])
+    result = SelfDiagnosisEngine()._check_strategies(None)
+    assert result["status"] == "warning"
+    assert result["maturity_counts"] == {
+        "implemented": 1,
+        "implemented_partial": 2,
+    }
+    assert result["verified_complete_count"] == 1
+    assert "2 partial" in result["detail"]
+
+
+def test_strategy_diagnostics_rejects_duplicate_registry_keys(monkeypatch):
+    from app.services.core_service import core_service
+
+    monkeypatch.setattr(core_service, "strategies", lambda: [
+        {"key": "trend_following_ema", "status": "implemented"},
+        {"key": "trend_following_ema", "status": "implemented"},
+    ])
+    result = SelfDiagnosisEngine()._check_strategies(None)
+    assert result["status"] == "error"
+    assert result["duplicate_keys"] == ["trend_following_ema"]
+
+
+def test_strategy_diagnostics_accepts_unique_implemented_strategies(monkeypatch):
+    from app.services.core_service import core_service
+
+    monkeypatch.setattr(core_service, "strategies", lambda: [
+        {"key": "trend_following_ema", "status": "implemented"},
+        {"key": "momentum_macd_rsi", "status": "implemented"},
+    ])
+    result = SelfDiagnosisEngine()._check_strategies(None)
+    assert result["status"] == "ok"
+    assert result["verified_complete_count"] == 2
+
+
+def test_news_source_diagnostics_reports_official_and_secondary_feeds(monkeypatch):
+    from app.data import public_news
+
+    monkeypatch.setattr(public_news, "NEWS_FEEDS", (
+        {"name": "Official", "url": "https://official.example/rss", "source_type": "official_primary"},
+        {"name": "Secondary", "url": "https://media.example/rss", "source_type": "secondary_media"},
+    ))
+    result = SelfDiagnosisEngine()._check_news_sources()
+    assert result["status"] == "ok"
+    assert result["feed_count"] == 2
+    assert result["official_source_count"] == 1
+    assert result["secondary_source_count"] == 1
+    assert result["network_checked"] is False
+
+
+def test_news_source_diagnostics_rejects_duplicate_or_insecure_feed_urls(monkeypatch):
+    from app.data import public_news
+
+    monkeypatch.setattr(public_news, "NEWS_FEEDS", (
+        {"name": "Official", "url": "https://official.example/rss", "source_type": "official_primary"},
+        {"name": "Duplicate", "url": "https://official.example/rss", "source_type": "secondary_media"},
+        {"name": "Insecure", "url": "http://media.example/rss", "source_type": "secondary_media"},
+    ))
+    result = SelfDiagnosisEngine()._check_news_sources()
+    assert result["status"] == "error"
+    assert result["invalid_url_count"] == 1
+    assert result["duplicate_urls"] == ["https://official.example/rss"]

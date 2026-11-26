@@ -547,6 +547,126 @@ class TitanCoreService:
         return list_strategies()
 
     @staticmethod
+    def _build_strategy_context(symbol: str, market: MarketType, data_source: str) -> dict[str, Any]:
+        """Build optional, provenance-checked public derivatives context for strategy candidates."""
+        if market != MarketType.FUTURES or data_source != "binance_public":
+            return {}
+        try:
+            from app.data.binance_futures_public import BinanceFuturesPublicData
+
+            snapshot = BinanceFuturesPublicData().get_mark_price(symbol)
+            raw_rate = snapshot.get("last_funding_rate")
+            raw_stamp = snapshot.get("time")
+            if isinstance(raw_rate, bool) or isinstance(raw_stamp, bool):
+                return {}
+            rate = float(raw_rate)
+            stamp_ms = float(raw_stamp)
+            now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+            if (not math.isfinite(rate) or abs(rate) > 0.05
+                    or not math.isfinite(stamp_ms) or stamp_ms <= 0
+                    or now_ms - stamp_ms < -60_000 or now_ms - stamp_ms > 120_000):
+                return {}
+            published = datetime.fromtimestamp(stamp_ms / 1000.0, timezone.utc).isoformat()
+            return {
+                "funding_rate": {
+                    "ok": True,
+                    "source": "binance_futures_public_read_only",
+                    "symbol": str(snapshot.get("symbol") or symbol).replace("/", "").upper(),
+                    "fetched_at": published,
+                    "funding_rate": rate,
+                }
+            }
+        except Exception:
+            # Missing public context must suppress the strategy, never block the
+            # deterministic market/risk pipeline or invent a funding signal.
+            return {}
+
+    @staticmethod
+    def _build_open_interest_strategy_context(symbol: str, market: MarketType, data_source: str) -> dict[str, Any]:
+        """Build a fresh, closed-candle price/OI divergence candidate from public Futures data."""
+        if market != MarketType.FUTURES or data_source != "binance_public":
+            return {}
+        try:
+            from app.data.binance_futures_public import BinanceFuturesPublicData
+
+            adapter = BinanceFuturesPublicData()
+            history = adapter.get_open_interest_history(symbol, period="5m", limit=3)
+            candles = adapter.get_klines(symbol, interval="5m", limit=3)
+            if len(history) < 2 or len(candles) < 3:
+                return {}
+            previous, latest = history[-2], history[-1]
+            # Ignore the currently-forming candle; compare the two latest closed candles.
+            previous_candle, latest_candle = candles[-3], candles[-2]
+            stamps = (int(latest["timestamp"]), int(latest_candle[6]))
+            now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+            if any(stamp <= 0 or now_ms - stamp < -60_000 or now_ms - stamp > 10 * 60_000 for stamp in stamps):
+                return {}
+            oi_previous = float(previous["open_interest"])
+            oi_latest = float(latest["open_interest"])
+            close_previous = float(previous_candle[4])
+            close_latest = float(latest_candle[4])
+            if not all(math.isfinite(value) and value > 0 for value in (
+                oi_previous, oi_latest, close_previous, close_latest
+            )):
+                return {}
+            oi_change = (oi_latest / oi_previous - 1.0) * 100.0
+            price_change = (close_latest / close_previous - 1.0) * 100.0
+            if not math.isfinite(oi_change) or not math.isfinite(price_change):
+                return {}
+            direction = "bearish" if price_change > 0 else "bullish" if price_change < 0 else "neutral"
+            return {
+                "open_interest": {
+                    "ok": True,
+                    "source": "binance_futures_public_read_only",
+                    "symbol": str(latest.get("symbol") or symbol).replace("/", "").upper(),
+                    "fetched_at": datetime.fromtimestamp(max(stamps) / 1000.0, timezone.utc).isoformat(),
+                    "open_interest_change_pct": oi_change,
+                    "price_change_pct": price_change,
+                    "direction": direction,
+                    "window": "two_latest_closed_5m_candles",
+                }
+            }
+        except Exception:
+            # A missing/stale OI snapshot suppresses only this candidate.
+            return {}
+
+    @staticmethod
+    def _build_cvd_strategy_context(order_flow: dict[str, Any] | None) -> dict[str, Any]:
+        """Expose a fresh, reconciled aggregate-trade delta as a bounded CVD candidate input."""
+        if not isinstance(order_flow, dict) or order_flow.get("ok") is not True:
+            return {}
+        source = order_flow.get("source")
+        if source not in {"binance_public_read_only", "binance_futures_public_read_only"}:
+            return {}
+        raw_delta = order_flow.get("taker_flow_delta_quote")
+        if isinstance(raw_delta, bool):
+            return {}
+        try:
+            delta = float(raw_delta)
+            first = datetime.fromisoformat(str(order_flow["first_trade_time"]).replace("Z", "+00:00"))
+            last = datetime.fromisoformat(str(order_flow["last_trade_time"]).replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            age = (now - last.astimezone(timezone.utc)).total_seconds()
+            window = (last.astimezone(timezone.utc) - first.astimezone(timezone.utc)).total_seconds()
+            if (not math.isfinite(delta) or first.tzinfo is None or last.tzinfo is None
+                    or age < -5 or age > 120 or window < 0 or window > 120):
+                return {}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return {}
+        return {
+            "cumulative_volume_delta": {
+                "ok": True,
+                "source": source,
+                "symbol": order_flow.get("symbol"),
+                "fetched_at": last.astimezone(timezone.utc).isoformat(),
+                "first_trade_time": first.astimezone(timezone.utc).isoformat(),
+                "last_trade_time": last.astimezone(timezone.utc).isoformat(),
+                "cvd_change": delta,
+                "window": "recent_public_aggregate_trades",
+            }
+        }
+
+    @staticmethod
     def _validate_public_market_batches(market_batches: dict, expected_market: str = "spot") -> None:
         """Fail closed if any required public timeframe is missing, stale, or malformed."""
         required = {
@@ -666,6 +786,9 @@ class TitanCoreService:
             news_context = {"ok": False, "error": "news_context_invalid"}
         from app.learning.outcomes import build_strategy_memory_context
         strategy_memory = build_strategy_memory_context(db)
+        strategy_context = self._build_strategy_context(symbol, market, data_source)
+        strategy_context.update(self._build_cvd_strategy_context(order_flow if microstructure_analysis.get("status") != "not_available" else None))
+        strategy_context.update(self._build_open_interest_strategy_context(symbol, market, data_source))
         result = self.decision.decide(
             symbol=symbol, market=market, environment=env,
             timeframe_analyses={Timeframe(k): v for k, v in analyses.items()},
@@ -674,6 +797,7 @@ class TitanCoreService:
             open_positions=len(open_positions), current_exposure=current_exposure,
             max_exposure=max_portfolio_exposure, max_open_positions=max_open_positions,
             news_context=news_context, strategy_memory=strategy_memory,
+            strategy_context=strategy_context,
         )
         # Optional external LLM review is strictly advisory and runs only when an
         # enabled provider is configured. It cannot alter the deterministic action
