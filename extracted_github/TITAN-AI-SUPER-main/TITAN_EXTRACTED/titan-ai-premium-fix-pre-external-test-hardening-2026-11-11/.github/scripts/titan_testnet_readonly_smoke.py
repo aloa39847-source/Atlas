@@ -4,10 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-import tempfile
-import zipfile
-from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -29,8 +25,8 @@ def main() -> int:
         emit({"ok": False, "error": "invalid_symbol"})
         return 2
 
-    # enabled=False is deliberate: even accidental future calls to place_order
-    # remain blocked. This smoke test performs GET requests only.
+    # Execution stays disabled. status() performs a signed GET only; no order
+    # endpoint is called anywhere in this diagnostic.
     credentials_present = bool(
         os.getenv("BINANCE_TESTNET_API_KEY")
         and os.getenv("BINANCE_TESTNET_API_SECRET")
@@ -51,75 +47,93 @@ def main() -> int:
         "credentials_present": credentials_present,
     }
 
-    exchange_info = adapter.get_exchange_info(symbol)
-    if not isinstance(exchange_info, dict) or exchange_info.get("error"):
-        report["testnet_exchange_info"] = {"ok": False, "error": "exchange_info_unavailable"}
-        emit(report)
-        return 1
-    symbols = exchange_info.get("symbols")
-    match = [item for item in symbols or [] if isinstance(item, dict) and item.get("symbol") == symbol]
-    if len(match) != 1 or match[0].get("status") != "TRADING":
-        report["testnet_exchange_info"] = {"ok": False, "error": "symbol_missing_ambiguous_or_not_trading"}
-        emit(report)
-        return 1
-    report["testnet_exchange_info"] = {
-        "ok": True, "symbol": symbol, "status": match[0].get("status"),
-        "base_asset": match[0].get("baseAsset"), "quote_asset": match[0].get("quoteAsset"),
-    }
-
+    # Check private account authentication FIRST. Previously exchangeInfo was
+    # checked first and an HTTP 451 from the runner prevented any key validation.
     if credentials_present:
         status = adapter.status()
-        connected = bool(status.get("connected"))
+        connected = status.get("connected") is True
         report["testnet_account_auth"] = {
             "ok": connected,
             "account_check": status.get("account_check"),
-            "trading_allowed": status.get("trading_allowed"),
-            "withdrawal_operations_supported": False,
+            "trade_permission": status.get("trade_permission"),
+            "execution_ready": status.get("execution_ready"),
+            "withdrawal_permissions": status.get("withdrawal_permissions", False),
         }
-        if not connected:
-            emit(report)
-            return 1
     else:
+        connected = False
         report["testnet_account_auth"] = {
-            "ok": None, "skipped": True,
-            "reason": "Add BINANCE_TESTNET_API_KEY and BINANCE_TESTNET_API_SECRET as GitHub Actions secrets to verify private account access.",
+            "ok": None,
+            "skipped": True,
+            "reason": "GitHub Actions Testnet API key/secret are not both configured.",
         }
 
-    # Analysis uses current public Binance market data (read-only), while account
-    # authentication and symbol metadata above are checked against Spot Testnet.
+    # Public market metadata is an independent check. Its failure must not hide
+    # the signed account-authentication result above.
+    exchange_info = adapter.get_exchange_info(symbol)
+    if not isinstance(exchange_info, dict) or exchange_info.get("error"):
+        detail = exchange_info if isinstance(exchange_info, dict) else {"response_type": type(exchange_info).__name__}
+        report["testnet_exchange_info"] = {
+            "ok": False,
+            "error": "exchange_info_unavailable",
+            "detail": detail,
+        }
+    else:
+        symbols = exchange_info.get("symbols")
+        match = [
+            item for item in symbols or []
+            if isinstance(item, dict) and item.get("symbol") == symbol
+        ]
+        valid_symbol = len(match) == 1 and match[0].get("status") == "TRADING"
+        report["testnet_exchange_info"] = {
+            "ok": valid_symbol,
+            "symbol": symbol if valid_symbol else None,
+            "status": match[0].get("status") if len(match) == 1 else None,
+            "base_asset": match[0].get("baseAsset") if len(match) == 1 else None,
+            "quote_asset": match[0].get("quoteAsset") if len(match) == 1 else None,
+            "error": None if valid_symbol else "symbol_missing_ambiguous_or_not_trading",
+        }
+
+    # Analysis is another independent read-only check. Capture failures rather
+    # than losing the already-collected account-auth result.
     settings.binance_public_data_enabled = True
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     try:
         with Session(engine, autoflush=False, autocommit=False) as db:
-            analysis = core_service.analyze(
-                db, symbol=symbol, market_type="spot", environment_mode="demo",
-            )
-            report["market_data"] = {
-                "ok": analysis.get("market_price_source") == "live_public",
-                "source": analysis.get("market_price_source"),
-                "timeframes": analysis.get("timeframes"),
-            }
-            report["analysis"] = {
-                "ok": bool(analysis.get("recorded")),
-                "action": analysis.get("action"),
-                "confidence": analysis.get("confidence"),
-                "decision_id": analysis.get("decision_id"),
-                "entry_price": analysis.get("entry_price"),
-                "stop_loss": analysis.get("stop_loss"),
-                "take_profit": analysis.get("take_profit"),
-            }
+            try:
+                analysis = core_service.analyze(
+                    db, symbol=symbol, market_type="spot", environment_mode="demo",
+                )
+                report["market_data"] = {
+                    "ok": analysis.get("market_price_source") == "live_public",
+                    "source": analysis.get("market_price_source"),
+                    "timeframes": analysis.get("timeframes"),
+                }
+                report["analysis"] = {
+                    "ok": bool(analysis.get("recorded")),
+                    "action": analysis.get("action"),
+                    "confidence": analysis.get("confidence"),
+                    "decision_id": analysis.get("decision_id"),
+                    "entry_price": analysis.get("entry_price"),
+                    "stop_loss": analysis.get("stop_loss"),
+                    "take_profit": analysis.get("take_profit"),
+                }
+            except Exception as exc:
+                report["market_data"] = {"ok": False, "error": str(exc)[:300]}
+                report["analysis"] = {"ok": False, "error": "analysis_unavailable"}
     finally:
         engine.dispose()
 
-    ok = bool(report["testnet_exchange_info"]["ok"]
-              and (report["testnet_account_auth"]["ok"] is not False)
-              and report.get("market_data", {}).get("ok")
-              and report.get("analysis", {}).get("ok"))
-    report["ok"] = ok
+    checks = [
+        report["testnet_account_auth"].get("ok") is True,
+        report["testnet_exchange_info"].get("ok") is True,
+        report.get("market_data", {}).get("ok") is True,
+        report.get("analysis", {}).get("ok") is True,
+    ]
+    report["ok"] = all(checks)
     report["next_stage"] = "testnet_order_lifecycle_requires_a_separate_explicitly_approved_workflow"
     emit(report)
-    return 0 if ok else 1
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":
