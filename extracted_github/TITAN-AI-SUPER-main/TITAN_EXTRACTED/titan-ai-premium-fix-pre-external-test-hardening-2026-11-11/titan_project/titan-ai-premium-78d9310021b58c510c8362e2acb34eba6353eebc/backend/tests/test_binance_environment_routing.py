@@ -56,6 +56,20 @@ def test_live_execution_requires_server_enablement_user_confirmation_and_worker(
     assert unconfirmed._execution_ready()["error"] == "live_requires_explicit_user_confirmation"
 
 
+def test_live_adapter_direct_execution_honors_server_global_disable(monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+        live_confirmed_by_user=True, live_worker_ready=True,
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    blocked = adapter._execution_ready()
+    assert blocked is not None
+    assert blocked["sent_to_exchange"] is False
+    assert blocked["error"] == "live_trading_disabled_by_server"
+
+
 def test_live_status_performs_read_only_account_and_permission_checks(monkeypatch):
     adapter = BinanceTestnetAdapter(BinanceConfig(
         enabled=True, environment="live", market="spot",
