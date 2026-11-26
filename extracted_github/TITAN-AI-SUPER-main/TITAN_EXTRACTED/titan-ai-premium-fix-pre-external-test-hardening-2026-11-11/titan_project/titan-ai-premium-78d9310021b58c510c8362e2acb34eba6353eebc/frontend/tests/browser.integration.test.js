@@ -183,7 +183,7 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     await page.locator('.tt-nav').getByRole('button', { name: /الاستراتيجيات/ }).click()
     await page.getByRole('heading', { name: /دفتر أوامر Futures التاريخي/ }).waitFor()
     await page.getByRole('button', { name: 'اختبار Order Flow من دفتر الأوامر' }).click()
-    await page.getByText('test-fixture', { exact: true }).waitFor()
+    await page.locator('.notice').filter({ hasText: 'مصدر البيانات: test-fixture' }).waitFor()
     assert.equal(futuresOrderbookBacktests, 1, 'Futures orderbook history panel did not call its backend API')
 
     await page.locator('.tt-nav').getByRole('button', { name: /التداول/ }).click()
