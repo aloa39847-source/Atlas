@@ -582,6 +582,42 @@ class TitanCoreService:
             return {}
 
     @staticmethod
+    def _build_cvd_strategy_context(order_flow: dict[str, Any] | None) -> dict[str, Any]:
+        """Expose a fresh, reconciled aggregate-trade delta as a bounded CVD candidate input."""
+        if not isinstance(order_flow, dict) or order_flow.get("ok") is not True:
+            return {}
+        source = order_flow.get("source")
+        if source not in {"binance_public_read_only", "binance_futures_public_read_only"}:
+            return {}
+        raw_delta = order_flow.get("taker_flow_delta_quote")
+        if isinstance(raw_delta, bool):
+            return {}
+        try:
+            delta = float(raw_delta)
+            first = datetime.fromisoformat(str(order_flow["first_trade_time"]).replace("Z", "+00:00"))
+            last = datetime.fromisoformat(str(order_flow["last_trade_time"]).replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            age = (now - last.astimezone(timezone.utc)).total_seconds()
+            window = (last.astimezone(timezone.utc) - first.astimezone(timezone.utc)).total_seconds()
+            if (not math.isfinite(delta) or first.tzinfo is None or last.tzinfo is None
+                    or age < -5 or age > 120 or window < 0 or window > 120):
+                return {}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return {}
+        return {
+            "cumulative_volume_delta": {
+                "ok": True,
+                "source": source,
+                "symbol": order_flow.get("symbol"),
+                "fetched_at": last.astimezone(timezone.utc).isoformat(),
+                "first_trade_time": first.astimezone(timezone.utc).isoformat(),
+                "last_trade_time": last.astimezone(timezone.utc).isoformat(),
+                "cvd_change": delta,
+                "window": "recent_public_aggregate_trades",
+            }
+        }
+
+    @staticmethod
     def _validate_public_market_batches(market_batches: dict, expected_market: str = "spot") -> None:
         """Fail closed if any required public timeframe is missing, stale, or malformed."""
         required = {
@@ -702,6 +738,7 @@ class TitanCoreService:
         from app.learning.outcomes import build_strategy_memory_context
         strategy_memory = build_strategy_memory_context(db)
         strategy_context = self._build_strategy_context(symbol, market, data_source)
+        strategy_context.update(self._build_cvd_strategy_context(order_flow if microstructure_analysis.get("status") != "not_available" else None))
         result = self.decision.decide(
             symbol=symbol, market=market, environment=env,
             timeframe_analyses={Timeframe(k): v for k, v in analyses.items()},
