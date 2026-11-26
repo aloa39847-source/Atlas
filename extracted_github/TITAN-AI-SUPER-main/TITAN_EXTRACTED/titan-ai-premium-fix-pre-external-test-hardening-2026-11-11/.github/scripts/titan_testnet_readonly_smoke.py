@@ -8,7 +8,6 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.integrations.binance_adapter import BinanceConfig, BinanceTestnetAdapter
 from app.models.db import Base
 from app.models import entities  # noqa: F401
@@ -104,7 +103,7 @@ def main() -> int:
             "authentication_verified": True if account_ok else None,
             "trade_permission": account.get("canTrade") if account_ok else None,
             "execution_ready": account_ok and account.get("canTrade") is True,
-            "withdrawal_permissions": False,
+            "withdrawal_operations_supported": False,
             "diagnostic": diagnostic or ({"error": account_error} if account_error else {}),
         }
     else:
@@ -143,7 +142,6 @@ def main() -> int:
 
     # Analysis is another independent read-only check. Capture failures rather
     # than losing the already-collected account-auth result.
-    settings.binance_public_data_enabled = True
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     try:
@@ -186,14 +184,9 @@ def main() -> int:
     report["external_access_blocked"] = location_restricted
     report["next_stage"] = "testnet_order_lifecycle_requires_a_separate_explicitly_approved_workflow"
     emit(report)
-    # A confirmed Binance HTTP 451 is an external runner-eligibility block,
-    # not a code regression or evidence of invalid credentials. Keep the
-    # report explicitly NOT ok / NOT authenticated, but don't fail the
-    # software regression workflow solely because Binance rejected the runner.
-    # All other authentication, API, market-data, and analysis failures remain
-    # hard failures.
-    if location_restricted:
-        return 0
+    # External access restrictions are a failed live-verification gate.
+    # They must never be converted into a successful CI result: authentication
+    # remains unverified and the exchange integration is not validated.
     return 0 if report["ok"] else 1
 
 
