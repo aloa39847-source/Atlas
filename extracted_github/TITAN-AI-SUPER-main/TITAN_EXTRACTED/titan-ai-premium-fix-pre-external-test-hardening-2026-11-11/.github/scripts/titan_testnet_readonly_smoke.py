@@ -87,9 +87,21 @@ def main() -> int:
                 except (TypeError, ValueError):
                     diagnostic["body"] = body[:500]
 
+        if account_ok:
+            account_check = "ok"
+        elif diagnostic.get("status") == "451" or "restricted location" in diagnostic.get("msg", "").lower():
+            # Binance has rejected the runner's location before credentials can
+            # be validated. Do not mislabel this as an invalid API key.
+            account_check = "binance_location_restricted_auth_not_verified"
+        elif diagnostic.get("status") in {"401", "403"} or diagnostic.get("code") == "-2015":
+            account_check = "credentials_rejected_or_permission_denied"
+        else:
+            account_check = "account_request_failed_or_invalid_payload"
+
         report["testnet_account_auth"] = {
             "ok": account_ok,
-            "account_check": "ok" if account_ok else "invalid_or_error_account_payload",
+            "account_check": account_check,
+            "authentication_verified": True if account_ok else None,
             "trade_permission": account.get("canTrade") if account_ok else None,
             "execution_ready": account_ok and account.get("canTrade") is True,
             "withdrawal_permissions": False,
