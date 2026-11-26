@@ -23,6 +23,18 @@ const NAV = [
   ['portfolio','المحفظة','▣'],['reports','التقارير','▤'],['settings','الإعدادات','⚙']
 ]
 const fmt = (v, d=2) => Number.isFinite(Number(v)) ? Number(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}) : '—'
+function createIdempotencyKey() {
+  const cryptoApi = globalThis.crypto
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID()
+  if (typeof cryptoApi?.getRandomValues !== 'function') {
+    throw new Error('هذا المتصفح لا يوفر مولداً آمناً لمفتاح منع تكرار الأمر؛ لم يتم إرسال الطلب.')
+  }
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`
+}
 
 function Panel({title,children,extra,className=''}) {
   return <section className={`tt-panel ${className}`}><div className="tt-panel-head"><strong>{title}</strong>{extra}</div>{children}</section>
@@ -464,7 +476,7 @@ export default function TerminalDashboard() {
         environment_mode:'demo',market_type:market,symbol:symbol.replace(/USDT$/,'/USDT'),
         side:market==='futures'?(orderSide==='buy'?'long':'short'):orderSide,
         order_type:orderType,quantity:Number(quantity),price:orderType==='limit'?Number(limitPrice||price):price,
-        leverage:1,simulate:'fill',fill_ratio:1,idempotency_key:crypto.randomUUID()
+        leverage:1,simulate:'fill',fill_ratio:1,idempotency_key:createIdempotencyKey()
       })
       setMessage(result.ok?'تم تسجيل أمر Shadow التجريبي.':JSON.stringify(result))
       await refreshSystem()
