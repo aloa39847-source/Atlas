@@ -660,8 +660,8 @@ def test_orchestrator_caps_added_futures_quantity_against_total_position_notiona
         shadow = ShadowTradingService()
         opened = shadow.create_shadow_order(
             db, env="demo", market="futures", symbol="BTC/USDT", side="buy",
-            order_type="market", quantity=7.0, price=100.0, reference_price=100.0,
-            idempotency_key="futures-cap-existing-700", leverage=10.0,
+            order_type="market", quantity=2.5, price=100.0, reference_price=100.0,
+            idempotency_key="futures-cap-existing-250", leverage=10.0,
         )
         db.commit()
         assert opened.ok
