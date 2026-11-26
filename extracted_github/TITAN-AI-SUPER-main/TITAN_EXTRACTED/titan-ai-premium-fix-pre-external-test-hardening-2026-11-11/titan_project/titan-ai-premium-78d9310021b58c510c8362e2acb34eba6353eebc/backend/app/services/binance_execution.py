@@ -395,7 +395,7 @@ class BinanceExecutionService:
             # A transport/HTTP error may mean Binance accepted the order but the
             # response was lost. Persist UNKNOWN and latch emergency stop; never retry.
             error = str(result.get("error") or result.get("reason") or "execution_rejected")
-            uncertain = any(token in error.lower() for token in ("timeout", "urlopen", "connection", "http_error", "remote end"))
+            uncertain = any(token in error.lower() for token in ("timeout", "timed out", "urlopen", "connection", "http_error", "remote end", "incomplete read"))
             record.status = "unknown" if uncertain else "rejected"
             record.reason = error[:500]
             db.add(record)
