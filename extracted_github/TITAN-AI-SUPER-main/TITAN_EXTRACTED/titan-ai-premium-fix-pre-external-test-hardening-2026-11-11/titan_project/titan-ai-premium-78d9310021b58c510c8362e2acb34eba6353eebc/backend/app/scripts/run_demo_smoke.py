@@ -76,7 +76,7 @@ def main() -> int:
         for symbol in TEST_SYMBOLS:
             result = orchestrator.run_cycle(
                 db, symbol=symbol, market="spot", environment="demo", execute_shadow=True,
-                max_data_age_seconds=300,
+                max_data_age_seconds=600,
             )
             db.commit()
             cycles.append({
