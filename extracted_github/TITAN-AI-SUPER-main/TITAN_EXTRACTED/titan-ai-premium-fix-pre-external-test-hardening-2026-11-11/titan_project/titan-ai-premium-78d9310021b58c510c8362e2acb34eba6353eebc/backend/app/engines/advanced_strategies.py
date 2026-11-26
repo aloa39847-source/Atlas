@@ -215,4 +215,5 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
         ev=["m5_m15_macd_alignment","m5_volume_expansion","higher_timeframe_bias"]
         if trend("5m")==bias and trend("15m")==bias: ev.append("entry_trend_alignment")
     out.append(add("momentum_burst",direction,ev))
-    return out
+    allowed = {item['key'] for item in ADVANCED_STRATEGIES if market.value in item['markets']}
+    return [candidate for candidate in out if candidate['key'] in allowed]
