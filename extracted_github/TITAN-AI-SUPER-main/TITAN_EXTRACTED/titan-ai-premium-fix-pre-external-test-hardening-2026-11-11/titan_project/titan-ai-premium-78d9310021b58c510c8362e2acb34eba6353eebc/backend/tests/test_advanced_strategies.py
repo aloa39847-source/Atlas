@@ -86,3 +86,30 @@ def test_market_neutral_pairs_and_stat_arb_never_become_single_leg_orders():
     assert candidate["qualified"]
     assert candidate["direction"] == "neutral"
     assert result["selected"] is None
+
+
+def test_ict_model_requires_multiple_confluences_and_uses_closed_structure_context():
+    tf = {
+        "1d": _tf("bullish"),
+        "4h": _tf("bullish"),
+        "1h": _tf("bullish"),
+        "15m": _tf("bullish", ["bullish_choch", "bullish_displacement"], structure={
+            "liquidity_sweeps": [{"direction": "bullish", "status": "confirmed"}],
+            "fair_value_gaps": [{"direction": "bullish", "status": "open", "ote_overlap": True}],
+        }),
+        "5m": _tf("bullish"),
+    }
+    result = evaluate_strategy_candidates(MarketType.SPOT, "bullish", timeframe_analyses=tf)
+    ict = next(x for x in result["candidates"] if x["key"] == "ict_smc_model")
+    assert ict["qualified"]
+    assert ict["score"] >= 4
+    assert {"ict_htf_dealing_bias", "ict_liquidity_raid", "ict_mss_or_choch",
+            "ict_displacement", "ict_fair_value_gap", "ict_ote_confluence"} <= set(ict["evidence"])
+
+
+def test_ict_model_does_not_signal_when_liquidity_or_structure_confirmation_missing():
+    tf = {name: _tf("bullish") for name in ("1d", "4h", "1h", "15m", "5m")}
+    result = evaluate_strategy_candidates(MarketType.SPOT, "bullish", timeframe_analyses=tf)
+    ict = next(x for x in result["candidates"] if x["key"] == "ict_smc_model")
+    assert not ict["qualified"]
+    assert ict["score"] == 1
