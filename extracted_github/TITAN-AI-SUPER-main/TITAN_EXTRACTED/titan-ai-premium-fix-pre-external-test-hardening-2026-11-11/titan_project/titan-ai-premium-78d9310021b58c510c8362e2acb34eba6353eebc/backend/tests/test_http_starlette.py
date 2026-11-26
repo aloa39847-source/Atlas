@@ -76,7 +76,7 @@ def test_http_endpoints_real_server(tmp_path, monkeypatch):
             assert j["state"]["environment_mode"] == "demo"
             assert any(e["key"] == "compliance_policy" for e in j["engines"])
             r = c.post("/api/analysis/decision", json={"symbol": "BTC/USDT", "market_type": "spot", "environment_mode": "demo"})
-            assert r.status_code == 200
+            assert r.status_code == 200, f"analysis endpoint returned {r.status_code}: {r.text}"
             a = r.json()
             assert a["action"] in {"buy","sell","long","short","wait"} and a["recorded"] is True
             assert "synthetic_labeled" in str(a["data_sources"])
