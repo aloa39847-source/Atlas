@@ -180,6 +180,14 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
     ):
         item=ctx.get(field); valid=_valid_public_context(item,market,expected_symbol,now)
         direction=item.get("direction","neutral") if valid else "neutral"
+        if key == "funding_rate" and valid:
+            rate = item.get("funding_rate")
+            if isinstance(rate, (int, float)) and math.isfinite(rate):
+                direction = "bearish" if rate > 0 else "bullish" if rate < 0 else "neutral"
+        if key == "cumulative_volume_delta" and valid:
+            delta = item.get("cvd_change")
+            if isinstance(delta, (int, float)) and math.isfinite(delta):
+                direction = "bullish" if delta > 0 else "bearish" if delta < 0 else "neutral"
         ev=[]
         if valid and direction in {"bullish","bearish"} and direction==bias:
             if key=="funding_rate" and isinstance(item.get("funding_rate"),(int,float)) and abs(item["funding_rate"])>=0.0001:
@@ -194,6 +202,9 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
                 ev=["opening_range_defined","close_confirmed_breakout","volume_confirmed"]
             elif key=="cumulative_volume_delta" and isinstance(item.get("cvd_change"),(int,float)) and abs(item["cvd_change"])>0:
                 ev=["trade_level_cvd","directional_delta","fresh_trade_window"]
+        # Pair/stat-arb signals are multi-leg portfolio trades, never single-symbol orders.
+        if key in {"statistical_arbitrage", "pairs_trading"}:
+            direction = "neutral"
         out.append(add(key,direction,ev))
     # Order-book imbalance is a separate, stricter named strategy over validated depth + taker flow.
     liq=(microstructure_analysis or {}).get("liquidity",{}) if isinstance(microstructure_analysis,dict) else {}
