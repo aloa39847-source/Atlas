@@ -1,0 +1,149 @@
+name: Atlas VPS Candidate Auto Deploy
+
+on:
+  workflow_run:
+    workflows: ["ATLAS Autonomous Trader CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-vps-candidate-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-candidate:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PROJECT_DIR: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+      IMAGE_TAG: titan-ai:candidate-${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout the exact CI-tested commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Build the exact CI-tested production image
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "${PROJECT_DIR}/Dockerfile"
+          docker build --pull -f "${PROJECT_DIR}/Dockerfile" -t "${IMAGE_TAG}" "${PROJECT_DIR}"
+          docker image inspect "${IMAGE_TAG}" >/dev/null
+          docker save "${IMAGE_TAG}" | gzip -1 > "${RUNNER_TEMP}/atlas-candidate-image.tar.gz"
+          test -s "${RUNNER_TEMP}/atlas-candidate-image.tar.gz"
+
+      - name: Configure verified SSH access
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_SSH_KEY}"
+          test -n "${VPS_KNOWN_HOSTS}"
+          install -m 700 -d "${RUNNER_TEMP}/atlas-ssh"
+          printf '%s\n' "${VPS_SSH_KEY}" > "${RUNNER_TEMP}/atlas-ssh/id_ed25519"
+          printf '%s\n' "${VPS_KNOWN_HOSTS}" > "${RUNNER_TEMP}/atlas-ssh/known_hosts"
+          chmod 600 "${RUNNER_TEMP}/atlas-ssh/id_ed25519" "${RUNNER_TEMP}/atlas-ssh/known_hosts"
+
+      - name: Transfer image and deploy isolated candidate with rollback
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_HOST}"
+          test -n "${VPS_USER}"
+          SSH=(ssh -i "${RUNNER_TEMP}/atlas-ssh/id_ed25519" -o IdentitiesOnly=yes -o UserKnownHostsFile="${RUNNER_TEMP}/atlas-ssh/known_hosts" -o StrictHostKeyChecking=yes)
+          SCP=(scp -i "${RUNNER_TEMP}/atlas-ssh/id_ed25519" -o IdentitiesOnly=yes -o UserKnownHostsFile="${RUNNER_TEMP}/atlas-ssh/known_hosts" -o StrictHostKeyChecking=yes)
+          REMOTE_TAR="/tmp/atlas-candidate-${GITHUB_SHA}.tar.gz"
+          "${SCP[@]}" "${RUNNER_TEMP}/atlas-candidate-image.tar.gz" "${VPS_USER}@${VPS_HOST}:${REMOTE_TAR}"
+          "${SSH[@]}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '${GITHUB_SHA}' '${REMOTE_TAR}'" <<'REMOTE'
+          set -euo pipefail
+          SHA="$1"
+          IMAGE="titan-ai:candidate-$SHA"
+          CANDIDATE="titan-ai-candidate-auto"
+          VOLUME="titan-ai-candidate-auto-data"
+          PORT="18002"
+          TAR="$2"
+          d() { sudo -n docker "$@"; }
+
+          cleanup() { rm -f "$TAR"; }
+          trap cleanup EXIT
+
+          d load -i "$TAR"
+          d image inspect "$IMAGE" >/dev/null
+          d volume create "$VOLUME" >/dev/null
+
+          OLD_IMAGE=""
+          if d container inspect "$CANDIDATE" >/dev/null 2>&1; then
+            MANAGED="$(d inspect --format '{{ index .Config.Labels "com.atlas.managed-by" }}' "$CANDIDATE")"
+            if [ "$MANAGED" != "github-actions" ]; then
+              echo "Refusing to replace an unmanaged container named $CANDIDATE" >&2
+              exit 1
+            fi
+            OLD_IMAGE="$(d inspect --format '{{.Config.Image}}' "$CANDIDATE")"
+            d stop "$CANDIDATE" >/dev/null
+            d rm "$CANDIDATE" >/dev/null
+          elif command -v ss >/dev/null 2>&1 && ss -ltnH | awk '{print $4}' | grep -Eq "[:.]$PORT$"; then
+            echo "Port $PORT is already occupied; refusing to interfere with another service" >&2
+            exit 1
+          fi
+
+          run_candidate() {
+            d run -d --name "$CANDIDATE" \
+              --label com.atlas.managed-by=github-actions \
+              --label "com.atlas.commit=$SHA" \
+              --restart unless-stopped \
+              -p "127.0.0.1:$PORT:8000" \
+              -v "$VOLUME:/data" \
+              -e TITAN_APP_ENV=production \
+              -e TITAN_AUTH_REQUIRED=true \
+              -e TITAN_DATA_DIR=/data \
+              -e TITAN_DATABASE_URL=sqlite:////data/titan.db \
+              -e TITAN_LIVE_TRADING_ENABLED=false \
+              "$1" >/dev/null
+          }
+
+          healthy() {
+            for attempt in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:$PORT/health" | grep -q '"ok":true'; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+
+          if ! run_candidate "$IMAGE" || ! healthy; then
+            echo "New candidate failed health verification; rolling back" >&2
+            d rm -f "$CANDIDATE" >/dev/null 2>&1 || true
+            if [ -n "$OLD_IMAGE" ]; then
+              run_candidate "$OLD_IMAGE"
+              if healthy; then
+                echo "Previous candidate restored and healthy"
+              else
+                echo "Rollback container started but health verification failed" >&2
+              fi
+            fi
+            exit 1
+          fi
+
+          echo "CANDIDATE_DEPLOYED commit=$SHA port=$PORT"
+          curl -fsS "http://127.0.0.1:$PORT/health"
+          echo
+          REMOTE
+
+      - name: Remove temporary SSH material
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/atlas-ssh" "${RUNNER_TEMP}/atlas-candidate-image.tar.gz"
