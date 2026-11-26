@@ -117,6 +117,8 @@ class BinanceTestnetAdapter:
         self.gateway = PreTradeOrderGateway()
 
     def _base_url(self) -> str:
+        if self.config.market not in {"spot", "futures"}:
+            raise RuntimeError("unsupported_binance_market")
         if self.config.environment == "live":
             return FUTURES_LIVE_BASE if self.config.market == "futures" else SPOT_LIVE_BASE
         if self.config.environment != "testnet":
@@ -240,6 +242,9 @@ class BinanceTestnetAdapter:
         environment = self.config.environment
         if environment not in {"testnet", "live"}:
             return {"provider": self.name, "configured": False, "connected": False, "error": "unsupported_binance_environment"}
+        if self.config.market not in {"spot", "futures"}:
+            return {"provider": self.name, "environment": environment, "market": self.config.market,
+                    "configured": False, "connected": False, "error": "unsupported_binance_market"}
         configured = bool(self._api_key() and self._api_secret())
         result = {
             "provider": "binance_" + environment,
@@ -247,7 +252,8 @@ class BinanceTestnetAdapter:
             "market": self.config.market,
             "configured": configured,
             "base_url": self._base_url(),
-            "withdrawal_permissions": False,
+            "withdrawal_permissions": False if environment == "testnet" else None,
+            "transfer_permissions": False if environment == "testnet" else None,
             "live_blocked": environment == "live" and not (
                 settings.live_trading_enabled
                 and self.config.live_confirmed_by_user
