@@ -3314,7 +3314,11 @@ async def binance_testnet_save(request):
                 return J({
                     "ok": True, "saved": True, "auto_started": False,
                     "test_status": status,
-                    "note": "Testnet account is authenticated, but API-key TRADE permission is not verified by read-only checks. The trading worker remains stopped.",
+                    "note": (
+                        "Testnet account is authenticated, but account-level trading is disabled. The trading worker remains stopped."
+                        if status.get("account_can_trade") is False else
+                        "Testnet account is authenticated, but API-key TRADE permission is not verified by read-only checks. The trading worker remains stopped."
+                    ),
                 })
             try:
                 prepared = core_service.start_bot(db, account_target="testnet")
