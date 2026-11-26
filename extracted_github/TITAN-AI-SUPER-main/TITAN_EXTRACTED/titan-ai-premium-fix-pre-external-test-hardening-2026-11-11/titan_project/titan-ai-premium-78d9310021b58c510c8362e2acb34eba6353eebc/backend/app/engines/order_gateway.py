@@ -283,7 +283,7 @@ class PreTradeOrderGateway:
         normalized = {
             "symbol": sym, "market": market.value, "side": sd, "order_type": ot,
             "quantity": quantity, "price": price, "reference_price": reference_price,
-            "notional_estimate": notional if px else None, "idempotency_key_present": bool(idempotency_key),
+            "notional_estimate": notional if px else None, "max_notional": effective_cap, "idempotency_key_present": bool(idempotency_key),
             "reduce_only": bool(reduce_only), "leverage": leverage,
             "exchange_filters_checked": filters_checked,
             "notional_cap_bypassed_for_reduce_only": reduce_only_exit,
