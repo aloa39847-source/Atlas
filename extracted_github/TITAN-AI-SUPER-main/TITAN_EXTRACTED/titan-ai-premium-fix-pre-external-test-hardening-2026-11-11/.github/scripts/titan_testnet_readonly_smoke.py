@@ -101,8 +101,14 @@ def main() -> int:
             "ok": account_ok,
             "account_check": account_check,
             "authentication_verified": True if account_ok else None,
-            "trade_permission": account.get("canTrade") if account_ok else None,
-            "execution_ready": account_ok and account.get("canTrade") is True,
+            "account_can_trade": account.get("canTrade") is True if account_ok else None,
+            "trade_permission": None,
+            "api_key_trade_permission_verified": None,
+            "execution_ready": False,
+            "execution_readiness_check": (
+                "api_key_trade_permission_requires_explicit_test_order_validation"
+                if account_ok else "account_authentication_not_verified"
+            ),
             "withdrawal_operations_supported": False,
             "diagnostic": diagnostic or ({"error": account_error} if account_error else {}),
         }
