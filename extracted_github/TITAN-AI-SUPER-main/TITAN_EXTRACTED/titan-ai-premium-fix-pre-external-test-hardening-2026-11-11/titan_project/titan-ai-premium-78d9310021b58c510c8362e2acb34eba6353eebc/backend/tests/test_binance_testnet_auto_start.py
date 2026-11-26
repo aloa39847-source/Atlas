@@ -91,6 +91,48 @@ def test_successful_testnet_credential_link_starts_selected_market_automatically
     assert "testnet-secret" not in response.body.decode("utf-8")
 
 
+def test_testnet_account_connected_but_trade_scope_unverified_saves_keys_without_starting_worker(monkeypatch):
+    db = FakeDB()
+    saved = []
+    worker_calls = []
+
+    class ReadOnlyConnectedAdapter:
+        def __init__(self, config):
+            pass
+        def status(self):
+            return {
+                "configured": True, "connected": True, "account_can_trade": True,
+                "api_key_trade_permission_verified": None, "execution_ready": False,
+                "execution_readiness_check": "api_key_trade_permission_requires_explicit_test_order_validation",
+            }
+
+    monkeypatch.setattr(star_app, "_binance_auth_error", lambda request: None)
+    monkeypatch.setattr(star_app, "body", lambda request: asyncio.sleep(0, result={
+        "api_key": "testnet-key", "api_secret": "testnet-secret", "market": "spot",
+    }))
+    monkeypatch.setattr(star_app, "BinanceTestnetAdapter", ReadOnlyConnectedAdapter)
+    monkeypatch.setattr(star_app, "save_testnet_credentials", lambda *args: saved.append(args))
+    monkeypatch.setattr(star_app, "db_sess", lambda: db)
+    monkeypatch.setattr(star_app.core_service, "get_state", lambda session: {"bot_run_state": "stopped"})
+    monkeypatch.setattr(star_app.core_service, "set_state", lambda session, **kwargs: kwargs)
+    from app.services.demo_worker_supervisor import demo_worker_supervisor
+    monkeypatch.setattr(demo_worker_supervisor, "start", lambda **kwargs: worker_calls.append(kwargs))
+
+    response = asyncio.run(star_app.binance_testnet_save(RequestStub()))
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["saved"] is True
+    assert payload["auto_started"] is False
+    assert payload["test_status"]["connected"] is True
+    assert payload["test_status"]["execution_ready"] is False
+    assert "TRADE permission is not verified" in payload["note"]
+    assert saved == [("testnet-key", "testnet-secret", "spot")]
+    assert worker_calls == []
+    assert db.closed is True
+
+
 def test_testnet_connection_failure_does_not_save_credentials_or_start_worker(monkeypatch):
     db = FakeDB()
     saved = []
