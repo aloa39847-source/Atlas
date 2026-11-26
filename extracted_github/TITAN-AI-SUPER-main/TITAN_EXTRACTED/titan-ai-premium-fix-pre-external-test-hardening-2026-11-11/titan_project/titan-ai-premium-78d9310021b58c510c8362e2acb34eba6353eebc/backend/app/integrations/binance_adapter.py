@@ -26,7 +26,7 @@ from app.core.config import settings
 
 
 SPOT_TESTNET_BASE = "https://testnet.binance.vision"
-FUTURES_TESTNET_BASE = "https://testnet.binancefuture.com"
+FUTURES_TESTNET_BASE = "https://demo-fapi.binance.com"
 SPOT_LIVE_BASE = "https://api.binance.com"
 FUTURES_LIVE_BASE = "https://fapi.binance.com"
 TESTNET_BASES = {SPOT_TESTNET_BASE, FUTURES_TESTNET_BASE}
