@@ -128,6 +128,39 @@ def test_futures_status_rejects_malformed_account_payload(monkeypatch):
     assert status["account_check"] == "invalid_or_error_response"
     assert status["execution_ready"] is False
 
+def test_invalid_binance_market_never_falls_back_to_spot():
+    adapter = BinanceTestnetAdapter(BinanceConfig(environment="testnet", market="futuresx"))
+    try:
+        adapter._base_url()
+        assert False, "Unsupported market must not select Spot endpoint"
+    except RuntimeError as exc:
+        assert "unsupported_binance_market" in str(exc)
+    assert adapter.status()["error"] == "unsupported_binance_market"
+
+
+def test_live_status_keeps_withdrawal_and_transfer_permissions_unknown_until_verified(monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+        api_key_ref="env:BINANCE_LIVE_API_KEY",
+        api_secret_ref="env:BINANCE_LIVE_API_SECRET",
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    def fake_request(method, path, signed=False, params=None):
+        if path == "/api/v3/account":
+            return {"canTrade": True, "balances": []}
+        if path == "/sapi/v1/account/apiRestrictions":
+            return {"error": "http_error", "status": 451}
+        raise AssertionError("Unexpected Live request")
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    status = adapter.status()
+    assert status["connected"] is True
+    assert status["permissions_verified"] is False
+    assert status["withdrawal_permissions"] is None
+    assert status["transfer_permissions"] is None
+    assert status["execution_ready"] is False
+
 
 def test_binance_credentials_are_separated_by_environment_and_market(tmp_path, monkeypatch):
     from app.services import credentials
