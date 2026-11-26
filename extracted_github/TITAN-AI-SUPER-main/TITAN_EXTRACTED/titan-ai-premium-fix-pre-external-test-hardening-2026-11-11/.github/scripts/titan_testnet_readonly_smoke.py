@@ -147,6 +147,27 @@ def main() -> int:
             "error": None if valid_symbol else "symbol_missing_ambiguous_or_not_trading",
         }
 
+    # Futures metadata is checked independently using its official Testnet
+    # endpoint. No Futures credentials or trading permissions are inferred.
+    futures_adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=False, environment="testnet", market="futures",
+    ))
+    futures_info = futures_adapter.get_exchange_info(symbol)
+    futures_symbols = futures_info.get("symbols") if isinstance(futures_info, dict) else None
+    futures_match = [
+        item for item in futures_symbols or []
+        if isinstance(item, dict) and item.get("symbol") == symbol
+    ]
+    futures_valid = len(futures_match) == 1 and futures_match[0].get("status") == "TRADING"
+    report["futures_testnet_exchange_info"] = {
+        "ok": futures_valid,
+        "symbol": symbol if futures_valid else None,
+        "status": futures_match[0].get("status") if len(futures_match) == 1 else None,
+        "error": None if futures_valid else "futures_testnet_symbol_missing_or_not_trading",
+        "account_auth_verified": False,
+        "note": "Public Futures Testnet endpoint only; separate Futures API credentials are not tested here.",
+    }
+
     # Analysis is another independent read-only check. Capture failures rather
     # than losing the already-collected account-auth result.
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
@@ -181,6 +202,7 @@ def main() -> int:
     checks = [
         report["testnet_account_auth"].get("ok") is True,
         report["testnet_exchange_info"].get("ok") is True,
+        report["futures_testnet_exchange_info"].get("ok") is True,
         report.get("market_data", {}).get("ok") is True,
         report.get("analysis", {}).get("ok") is True,
     ]
