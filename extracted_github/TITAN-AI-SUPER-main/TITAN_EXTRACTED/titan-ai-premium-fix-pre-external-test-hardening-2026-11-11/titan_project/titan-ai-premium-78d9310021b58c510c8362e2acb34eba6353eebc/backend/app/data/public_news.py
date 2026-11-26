@@ -58,13 +58,13 @@ def _date(value: str | None) -> str | None:
     try:
         parsed = parsedate_to_datetime(value)
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            return None
         return parsed.astimezone(timezone.utc).isoformat()
     except (TypeError, ValueError, OverflowError):
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
+                return None
             return parsed.astimezone(timezone.utc).isoformat()
         except (TypeError, ValueError, OverflowError):
             return None

@@ -166,3 +166,11 @@ def test_atom_updated_timestamp_does_not_replace_missing_original_publication_ti
     analyzed = NewsAnalysisEngine().analyze_items(rows)
     assert analyzed["count"] == 0
     assert analyzed["rejected_stale_or_undated_count"] == 1
+
+
+def test_publication_date_parser_rejects_naive_timestamps():
+    from app.data.public_news import _date
+
+    assert _date("2026-11-26T03:00:00") is None
+    assert _date("Wed, 26 Nov 2026 03:00:00") is None
+    assert _date("2026-11-26T03:00:00+02:00") == "2026-11-26T01:00:00+00:00"
