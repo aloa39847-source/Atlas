@@ -149,10 +149,11 @@ def main() -> int:
             try:
                 analysis = core_service.analyze(
                     db, symbol=symbol, market_type="spot", environment_mode="demo",
+                    data_source="binance_public",
                 )
                 report["market_data"] = {
-                    "ok": analysis.get("market_price_source") == "live_public",
-                    "source": analysis.get("market_price_source"),
+                    "ok": analysis.get("data_source") == "binance_public",
+                    "source": analysis.get("data_source"),
                     "timeframes": analysis.get("timeframes"),
                 }
                 report["analysis"] = {
