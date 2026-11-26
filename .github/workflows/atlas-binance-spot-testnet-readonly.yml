@@ -28,6 +28,9 @@ concurrency:
   group: atlas-binance-spot-testnet-readonly
   cancel-in-progress: false
 
+env:
+  PROJECT_DIR: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+
 jobs:
   readonly-smoke:
     runs-on: ubuntu-latest
@@ -36,11 +39,10 @@ jobs:
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
       TITAN_TESTNET_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
-      TITAN_BINANCE_PUBLIC_DATA_ENABLED: "true"
       TITAN_LIVE_TRADING_ENABLED: "false"
       BINANCE_TESTNET_MARKET: "spot"
     steps:
-      - name: Checkout current main branch
+      - name: Checkout PR merge ref
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -111,7 +113,7 @@ jobs:
           ROOT="${{ steps.source.outputs.root }}"
           SMOKE="$GITHUB_WORKSPACE/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
           tar -C "$ROOT" -czf "${RUNNER_TEMP}/backend.tar.gz" .
-          printf 'BINANCE_TESTNET_API_KEY=%s\nBINANCE_TESTNET_API_SECRET=%s\n' "${BINANCE_TESTNET_API_KEY}" "${BINANCE_TESTNET_API_SECRET}" > "${RUNNER_TEMP}/binance-testnet.env"
+          printf 'BINANCE_TESTNET_API_KEY=%s\nBINANCE_TESTNET_API_SECRET=%s\nTITAN_TESTNET_SYMBOL=%s\n' "${BINANCE_TESTNET_API_KEY}" "${BINANCE_TESTNET_API_SECRET}" "${TITAN_TESTNET_SYMBOL}" > "${RUNNER_TEMP}/binance-testnet.env"
           chmod 600 "${RUNNER_TEMP}/binance-testnet.env"
           "${SSH[@]}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${REMOTE_DIR}'"
           "${SCP[@]}" "${RUNNER_TEMP}/backend.tar.gz" "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/backend.tar.gz"
@@ -120,13 +122,14 @@ jobs:
           "${SSH[@]}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '${REMOTE_DIR}'" <<'REMOTE'
           set -euo pipefail
           REMOTE_DIR="$HOME/$1"
+          cleanup() { rm -rf "$REMOTE_DIR"; }
+          trap cleanup EXIT
           cd "$REMOTE_DIR"
           mkdir -p backend
           tar -xzf backend.tar.gz -C backend
           chmod 600 binance-testnet.env
           sudo -n docker run --rm --network host \
             --env-file "$REMOTE_DIR/binance-testnet.env" \
-            -e TITAN_TESTNET_SYMBOL=BTCUSDT \
             -e TITAN_LIVE_TRADING_ENABLED=false \
             -e BINANCE_TESTNET_MARKET=spot \
             -e TITAN_AUTH_REQUIRED=false \
@@ -134,9 +137,21 @@ jobs:
             -v "$REMOTE_DIR/smoke.py:/smoke.py:ro" \
             -w /app python:3.12-slim sh -lc \
             'pip install --disable-pip-version-check -r requirements.txt && PYTHONPATH=/app python /smoke.py'
-          rm -rf "$REMOTE_DIR"
           REMOTE
           rm -f "${RUNNER_TEMP}/backend.tar.gz" "${RUNNER_TEMP}/binance-testnet.env"
+
+      - name: Remove temporary VPS test files if the smoke step failed
+        if: always()
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          if [ -n "${VPS_HOST}" ] && [ -n "${VPS_USER}" ] && [ -f "${RUNNER_TEMP}/atlas-ssh/id_ed25519" ]; then
+            ssh -i "${RUNNER_TEMP}/atlas-ssh/id_ed25519" -o IdentitiesOnly=yes -o UserKnownHostsFile="${RUNNER_TEMP}/atlas-ssh/known_hosts" -o StrictHostKeyChecking=yes \
+              "${VPS_USER}@${VPS_HOST}" "rm -rf '.cache/atlas-spot-testnet-${GITHUB_SHA}'" || true
+          fi
 
       - name: Remove temporary SSH material
         if: always()
