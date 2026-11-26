@@ -38,7 +38,7 @@ jobs:
     env:
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
-      TITAN_TESTNET_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
+      TITAN_TESTNET_SYMBOL: ${{ github.event.inputs.symbol || 'BTCUSDT' }}
       TITAN_LIVE_TRADING_ENABLED: "false"
       BINANCE_TESTNET_MARKET: "spot"
     steps:
