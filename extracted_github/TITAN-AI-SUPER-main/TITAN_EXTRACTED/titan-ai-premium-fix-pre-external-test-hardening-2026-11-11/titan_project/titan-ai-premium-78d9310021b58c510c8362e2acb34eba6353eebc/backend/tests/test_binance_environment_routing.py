@@ -370,7 +370,7 @@ def test_live_execution_readiness_needs_only_exchange_permissions_user_confirmat
 
 
 def test_live_adapter_does_not_require_extra_server_or_geo_kyc_environment_flags(monkeypatch):
-    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
     adapter = BinanceTestnetAdapter(BinanceConfig(
         enabled=True, environment="live", market="spot",
         live_confirmed_by_user=True, live_worker_ready=True,
