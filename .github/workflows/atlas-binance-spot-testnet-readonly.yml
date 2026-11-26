@@ -84,6 +84,7 @@ jobs:
           pytest -q
 
       - name: Verify read-only Spot Testnet connectivity and market analysis
+        if: always()
         shell: bash
         env:
           PYTHONPATH: ${{ steps.source.outputs.root }}
