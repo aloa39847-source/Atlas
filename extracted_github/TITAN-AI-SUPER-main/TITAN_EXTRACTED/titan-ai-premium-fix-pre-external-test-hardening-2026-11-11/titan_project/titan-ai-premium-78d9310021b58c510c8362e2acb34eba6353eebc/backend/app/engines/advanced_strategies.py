@@ -283,6 +283,6 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
     if fvg_found: ict_evidence.append("ict_fair_value_gap")
     if ote_found: ict_evidence.append("ict_ote_confluence")
     if killzone_found: ict_evidence.append("ict_killzone_confluence")
-    out.append(add("ict_smc_model", ict_direction, ict_evidence, min_score=4))
+    out.append(add("ict_smc_model", ict_direction, ict_evidence, min_score=5))
     allowed = {item['key'] for item in ADVANCED_STRATEGIES if market.value in item['markets']}
     return [candidate for candidate in out if candidate['key'] in allowed]
