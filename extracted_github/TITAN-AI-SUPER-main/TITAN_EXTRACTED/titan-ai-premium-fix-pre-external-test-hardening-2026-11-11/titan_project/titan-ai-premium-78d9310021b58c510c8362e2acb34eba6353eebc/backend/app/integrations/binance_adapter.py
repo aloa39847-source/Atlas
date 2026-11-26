@@ -364,6 +364,8 @@ class BinanceTestnetAdapter:
             return {"ok": False, "sent_to_exchange": False,
                     "error": "live_credentials_missing" if self.config.environment == "live" else "testnet_credentials_missing"}
         if self.config.environment == "live":
+            if not settings.live_trading_enabled:
+                return {"ok": False, "sent_to_exchange": False, "error": "live_trading_disabled_by_server"}
             if not self.config.live_confirmed_by_user:
                 return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
             if not self.config.live_worker_ready:
