@@ -69,6 +69,7 @@ class NewsAnalysisEngine(Engine):
         normalized_keyword = (keyword or "").strip().lower()
         keyword_symbol = normalized_keyword.upper() if normalized_keyword.upper() in _SYMBOL_TERMS else None
         analyzed = []
+        rejected_stale_count = 0
         for item in items:
             title = str(item.get("title") or "")
             summary = str(item.get("summary") or "")
@@ -122,24 +123,23 @@ class NewsAnalysisEngine(Engine):
             evidence_hits = len(set(positive_hits) | set(negative_hits))
             confidence = min(0.85, 0.25 + evidence_hits * 0.12) if evidence_hits else 0.1
             published_at = item.get("published_at")
-            published_age_hours = None
-            freshness = "unknown"
-            if isinstance(published_at, str):
-                try:
-                    published_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-                    if published_dt.tzinfo is None:
-                        published_dt = published_dt.replace(tzinfo=timezone.utc)
-                    published_age_hours = (datetime.now(timezone.utc) - published_dt.astimezone(timezone.utc)).total_seconds() / 3600.0
-                    if published_age_hours < -1:
-                        freshness = "future_timestamp"
-                    elif published_age_hours <= 24:
-                        freshness = "fresh"
-                    elif published_age_hours <= 72:
-                        freshness = "recent"
-                    else:
-                        freshness = "stale"
-                except (TypeError, ValueError, OverflowError):
-                    freshness = "unknown"
+            # Fail closed: only a verifiable original publication timestamp
+            # within the last 60 minutes may influence news analysis.
+            try:
+                if not isinstance(published_at, str) or not published_at.strip():
+                    raise ValueError("missing_publication_timestamp")
+                published_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                if published_dt.tzinfo is None:
+                    raise ValueError("publication_timestamp_missing_timezone")
+                published_age_seconds = (datetime.now(timezone.utc) - published_dt.astimezone(timezone.utc)).total_seconds()
+                if published_age_seconds < 0 or published_age_seconds > 3600:
+                    rejected_stale_count += 1
+                    continue
+                published_age_hours = published_age_seconds / 3600.0
+            except (TypeError, ValueError, OverflowError):
+                rejected_stale_count += 1
+                continue
+            freshness = "fresh"
             analyzed.append({
                 **item,
                 "sentiment": sentiment,
@@ -160,9 +160,11 @@ class NewsAnalysisEngine(Engine):
             "keyword": keyword,
             "count": len(analyzed),
             "items": analyzed,
+            "max_age_minutes": 60,
+            "rejected_stale_or_undated_count": rejected_stale_count,
             "signal": "not_generated",
             "execution": "none",
-            "note": "Keyword lexicon only; negation, sarcasm, context and source bias are not fully modeled. News sentiment is not a trade signal.",
+            "note": "Only items with a timezone-aware original publication timestamp aged 0-60 minutes are analyzed; missing, invalid, future, or older items are excluded. Keyword lexicon only; negation, sarcasm, context and source bias are not fully modeled. News sentiment is not a trade signal.",
         }
 
     def fetch_and_analyze(self, *, keyword: str | None = None, limit: int = 50) -> dict[str, Any]:
