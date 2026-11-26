@@ -179,8 +179,21 @@ def main() -> int:
         report.get("analysis", {}).get("ok") is True,
     ]
     report["ok"] = all(checks)
+    location_restricted = (
+        report["testnet_account_auth"].get("account_check")
+        == "binance_location_restricted_auth_not_verified"
+    )
+    report["external_access_blocked"] = location_restricted
     report["next_stage"] = "testnet_order_lifecycle_requires_a_separate_explicitly_approved_workflow"
     emit(report)
+    # A confirmed Binance HTTP 451 is an external runner-eligibility block,
+    # not a code regression or evidence of invalid credentials. Keep the
+    # report explicitly NOT ok / NOT authenticated, but don't fail the
+    # software regression workflow solely because Binance rejected the runner.
+    # All other authentication, API, market-data, and analysis failures remain
+    # hard failures.
+    if location_restricted:
+        return 0
     return 0 if report["ok"] else 1
 
 
