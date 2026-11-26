@@ -317,3 +317,26 @@ def test_futures_strategy_context_rejects_stale_funding_snapshot(monkeypatch):
         },
     )
     assert TitanCoreService._build_strategy_context("BTC/USDT", MarketType.FUTURES, "binance_public") == {}
+
+
+def test_fresh_futures_funding_context_qualifies_contrarian_strategy():
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    context = {
+        "funding_rate": {
+            "ok": True,
+            "source": "binance_futures_public_read_only",
+            "symbol": "BTCUSDT",
+            "fetched_at": now.isoformat(),
+            "funding_rate": 0.0002,
+        }
+    }
+    result = evaluate_strategy_candidates(
+        MarketType.FUTURES, "bearish", {}, strategy_context=context,
+        expected_symbol="BTCUSDT",
+    )
+    funding = next(item for item in result["candidates"] if item["key"] == "funding_rate")
+    assert funding["qualified"] is True
+    assert funding["direction"] == "bearish"
+    assert "fresh_funding_rate" in funding["evidence"]
