@@ -263,3 +263,57 @@ def test_breakout_smc_countertrend_requires_same_direction_choch():
     assert BacktestEngine._strategy_action("breakout_structure",analysis) is None
     analysis.structure["bos_choch"]=[{"type":"CHOCH","direction":"bullish"}]
     assert BacktestEngine._strategy_action("breakout_structure",analysis)=="buy"
+
+
+def test_futures_strategy_context_uses_fresh_public_funding_data(monkeypatch):
+    from datetime import datetime, timezone
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+    monkeypatch.setattr(
+        binance_futures_public.BinanceFuturesPublicData,
+        "get_mark_price",
+        lambda self, symbol: {
+            "symbol": "BTCUSDT", "last_funding_rate": 0.0002,
+            "time": now_ms, "source": "binance_usdm_futures_public_read_only",
+        },
+    )
+    context = TitanCoreService._build_strategy_context("BTC/USDT", MarketType.FUTURES, "binance_public")
+    funding = context["funding_rate"]
+    assert funding["ok"] is True
+    assert funding["source"] == "binance_futures_public_read_only"
+    assert funding["symbol"] == "BTCUSDT"
+    assert funding["funding_rate"] == 0.0002
+    assert datetime.fromisoformat(funding["fetched_at"]).tzinfo is not None
+
+
+def test_futures_strategy_context_fails_closed_for_spot_or_synthetic_data(monkeypatch):
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("public Futures adapter must not be called")
+    monkeypatch.setattr(binance_futures_public.BinanceFuturesPublicData, "get_mark_price", unexpected_call)
+    assert TitanCoreService._build_strategy_context("BTC/USDT", MarketType.SPOT, "binance_public") == {}
+    assert TitanCoreService._build_strategy_context("BTC/USDT", MarketType.FUTURES, "synthetic") == {}
+
+
+def test_futures_strategy_context_rejects_stale_funding_snapshot(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app.data import binance_futures_public
+    from app.core.enums import MarketType
+    from app.services.core_service import TitanCoreService
+
+    stale_ms = (datetime.now(timezone.utc) - timedelta(minutes=3)).timestamp() * 1000.0
+    monkeypatch.setattr(
+        binance_futures_public.BinanceFuturesPublicData,
+        "get_mark_price",
+        lambda self, symbol: {
+            "symbol": "BTCUSDT", "last_funding_rate": 0.0002,
+            "time": stale_ms, "source": "binance_usdm_futures_public_read_only",
+        },
+    )
+    assert TitanCoreService._build_strategy_context("BTC/USDT", MarketType.FUTURES, "binance_public") == {}
