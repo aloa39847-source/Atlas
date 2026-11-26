@@ -47,20 +47,56 @@ def main() -> int:
         "credentials_present": credentials_present,
     }
 
-    # Check private account authentication FIRST. Previously exchangeInfo was
-    # checked first and an HTTP 451 from the runner prevented any key validation.
+    # Check private account authentication FIRST. Use the adapter's signed
+    # account GET directly so its low-level Binance error is not collapsed into
+    # a generic status flag. This is read-only; no order endpoint is called.
     if credentials_present:
-        status = adapter.status()
-        connected = status.get("connected") is True
+        try:
+            account = adapter._request("GET", "/api/v3/account", signed=True)
+        except Exception as exc:
+            account = {"error": type(exc).__name__, "message": str(exc)[:400]}
+
+        account_error = None
+        if isinstance(account, dict):
+            account_error = account.get("error")
+            if account_error is None and isinstance(account.get("code"), int) and account["code"] < 0:
+                account_error = "binance_api_error"
+        else:
+            account_error = "invalid_response_type"
+
+        account_ok = (
+            isinstance(account, dict)
+            and account_error is None
+            and isinstance(account.get("balances"), list)
+            and isinstance(account.get("canTrade"), bool)
+        )
+        diagnostic = {}
+        if isinstance(account, dict):
+            for field in ("error", "status", "code", "msg", "message"):
+                value = account.get(field)
+                if value is not None:
+                    diagnostic[field] = str(value)[:500]
+            body = account.get("body")
+            if isinstance(body, str) and body:
+                try:
+                    parsed_body = json.loads(body)
+                    if isinstance(parsed_body, dict):
+                        for field in ("code", "msg"):
+                            if parsed_body.get(field) is not None:
+                                diagnostic[field] = str(parsed_body[field])[:500]
+                except (TypeError, ValueError):
+                    diagnostic["body"] = body[:500]
+
         report["testnet_account_auth"] = {
-            "ok": connected,
-            "account_check": status.get("account_check"),
-            "trade_permission": status.get("trade_permission"),
-            "execution_ready": status.get("execution_ready"),
-            "withdrawal_permissions": status.get("withdrawal_permissions", False),
+            "ok": account_ok,
+            "account_check": "ok" if account_ok else "invalid_or_error_account_payload",
+            "trade_permission": account.get("canTrade") if account_ok else None,
+            "execution_ready": account_ok and account.get("canTrade") is True,
+            "withdrawal_permissions": False,
+            "diagnostic": diagnostic or ({"error": account_error} if account_error else {}),
         }
     else:
-        connected = False
+        account_ok = False
         report["testnet_account_auth"] = {
             "ok": None,
             "skipped": True,
@@ -120,7 +156,7 @@ def main() -> int:
                 }
             except Exception as exc:
                 report["market_data"] = {"ok": False, "error": str(exc)[:300]}
-                report["analysis"] = {"ok": False, "error": "analysis_unavailable"}
+                report["analysis"] = {"ok": False, "error": str(exc)[:300]}
     finally:
         engine.dispose()
 
