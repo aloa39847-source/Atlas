@@ -433,7 +433,7 @@ def test_open_interest_context_uses_closed_candles_and_computes_divergence(monke
         "BTCUSDT", MarketType.FUTURES, "binance_public"
     )
     oi = context["open_interest"]
-    assert oi["open_interest_change_pct"] == 2.0
+    assert oi["open_interest_change_pct"] == pytest.approx(2.0)
     assert oi["price_change_pct"] > 0
     assert oi["direction"] == "bearish"
     assert oi["window"] == "two_latest_closed_5m_candles"
