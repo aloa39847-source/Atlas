@@ -83,6 +83,10 @@ jobs:
 
       - name: Run offline regression suite
         shell: bash
+        env:
+          # Unit/integration regression tests must use deterministic synthetic
+          # fixtures, never depend on Binance or public-network eligibility.
+          TITAN_BINANCE_PUBLIC_DATA_ENABLED: "false"
         run: |
           set -euo pipefail
           cd "${{ steps.source.outputs.root }}"
