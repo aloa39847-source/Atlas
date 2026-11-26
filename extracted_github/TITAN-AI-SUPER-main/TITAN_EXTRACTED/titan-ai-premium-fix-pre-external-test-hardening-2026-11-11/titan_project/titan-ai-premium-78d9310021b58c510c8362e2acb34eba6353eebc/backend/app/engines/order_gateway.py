@@ -147,8 +147,8 @@ class PreTradeOrderGateway:
         notional = (px or 0.0) * quantity
         configured_cap = (
             settings.max_spot_trade_notional if market == MarketType.SPOT
-            else settings.max_futures_trade_notional if market == MarketType.FUTURES
-            else 0.0
+            else min(settings.max_futures_trade_notional, settings.max_futures_trade_margin * leverage)
+            if market == MarketType.FUTURES else 0.0
         )
         effective_cap = configured_cap if max_notional is None else min(configured_cap, float(max_notional))
         # A validated Futures reduce-only close lowers an existing position;
