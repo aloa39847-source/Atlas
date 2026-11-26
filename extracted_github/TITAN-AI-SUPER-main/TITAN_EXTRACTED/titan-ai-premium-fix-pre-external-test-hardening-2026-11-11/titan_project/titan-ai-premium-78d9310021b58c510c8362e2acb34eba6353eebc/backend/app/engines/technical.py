@@ -235,6 +235,112 @@ def _ichimoku(high: Sequence[float], low: Sequence[float]) -> dict[str,list[floa
     return {"ichimoku_tenkan":tenkan,"ichimoku_kijun":kijun,"ichimoku_span_a":span_a,"ichimoku_span_b":span_b}
 
 
+def _adx(high: Sequence[float], low: Sequence[float], close: Sequence[float], n: int = 14) -> dict[str, list[float | None]]:
+    size = len(close)
+    plus_dm = [0.0] * size
+    minus_dm = [0.0] * size
+    tr = [0.0] * size
+    for i in range(size):
+        if i == 0:
+            tr[i] = float(high[i]) - float(low[i])
+            continue
+        up = float(high[i]) - float(high[i-1])
+        down = float(low[i-1]) - float(low[i])
+        plus_dm[i] = up if up > down and up > 0 else 0.0
+        minus_dm[i] = down if down > up and down > 0 else 0.0
+        tr[i] = max(float(high[i])-float(low[i]), abs(float(high[i])-float(close[i-1])), abs(float(low[i])-float(close[i-1])))
+    atr = _ema_wilder(tr, n)
+    plus_sm = _ema_wilder(plus_dm, n)
+    minus_sm = _ema_wilder(minus_dm, n)
+    plus_di = [None] * size
+    minus_di = [None] * size
+    dx = [None] * size
+    for i in range(size):
+        if atr[i] is None or atr[i] <= 0 or plus_sm[i] is None or minus_sm[i] is None:
+            continue
+        plus_di[i] = 100.0 * plus_sm[i] / atr[i]
+        minus_di[i] = 100.0 * minus_sm[i] / atr[i]
+        denom = plus_di[i] + minus_di[i]
+        dx[i] = 100.0 * abs(plus_di[i] - minus_di[i]) / denom if denom else 0.0
+    valid_dx = [float(v) if v is not None else 0.0 for v in dx]
+    adx = _ema_wilder(valid_dx, n)
+    return {"adx14": adx, "plus_di14": plus_di, "minus_di14": minus_di}
+
+
+def _parabolic_sar(high: Sequence[float], low: Sequence[float], step: float = 0.02, maximum: float = 0.2) -> dict[str, list[float | str | None]]:
+    size = len(high)
+    sar: list[float | None] = [None] * size
+    direction: list[str | None] = [None] * size
+    if size < 2:
+        return {"parabolic_sar": sar, "parabolic_sar_direction": direction}
+    bullish = float(high[1]) + float(low[1]) >= float(high[0]) + float(low[0])
+    ep = max(float(high[0]), float(high[1])) if bullish else min(float(low[0]), float(low[1]))
+    sar[1] = min(float(low[0]), float(low[1])) if bullish else max(float(high[0]), float(high[1]))
+    af = step
+    direction[1] = "bullish" if bullish else "bearish"
+    for i in range(2, size):
+        previous = float(sar[i-1])
+        current = previous + af * (ep - previous)
+        if bullish:
+            current = min(current, float(low[i-1]), float(low[i-2]))
+            if float(low[i]) < current:
+                bullish = False
+                current = ep
+                ep = float(low[i])
+                af = step
+            elif float(high[i]) > ep:
+                ep = float(high[i])
+                af = min(maximum, af + step)
+        else:
+            current = max(current, float(high[i-1]), float(high[i-2]))
+            if float(high[i]) > current:
+                bullish = True
+                current = ep
+                ep = float(high[i])
+                af = step
+            elif float(low[i]) < ep:
+                ep = float(low[i])
+                af = min(maximum, af + step)
+        sar[i] = current
+        direction[i] = "bullish" if bullish else "bearish"
+    return {"parabolic_sar": sar, "parabolic_sar_direction": direction}
+
+
+def _volume_profile(high: Sequence[float], low: Sequence[float], close: Sequence[float],
+                    volume: Sequence[float], bins: int = 24) -> dict[str, float | None]:
+    """Approximate candle-volume profile; allocates each candle's volume to its typical price bin."""
+    if not close or not volume or len(close) != len(volume):
+        return {"volume_profile_poc": None, "volume_profile_vah": None, "volume_profile_val": None}
+    lo, hi = min(float(x) for x in low), max(float(x) for x in high)
+    total = sum(float(v) for v in volume)
+    if hi <= lo or total <= 0:
+        return {"volume_profile_poc": None, "volume_profile_vah": None, "volume_profile_val": None}
+    width = (hi - lo) / bins
+    buckets = [0.0] * bins
+    for h, l, c, v in zip(high, low, close, volume):
+        if float(v) <= 0:
+            continue
+        typical = (float(h) + float(l) + float(c)) / 3.0
+        index = max(0, min(bins - 1, int((typical - lo) / width)))
+        buckets[index] += float(v)
+    poc_index = max(range(bins), key=lambda i: buckets[i])
+    target = sum(buckets) * 0.70
+    left = right = poc_index
+    accumulated = buckets[poc_index]
+    while accumulated < target and (left > 0 or right < bins - 1):
+        left_volume = buckets[left-1] if left > 0 else -1
+        right_volume = buckets[right+1] if right < bins-1 else -1
+        if right_volume > left_volume:
+            right += 1
+            accumulated += buckets[right]
+        else:
+            left -= 1
+            accumulated += buckets[left]
+    center = lambda i: lo + (i + 0.5) * width
+    return {"volume_profile_poc": center(poc_index), "volume_profile_vah": lo + (right + 1) * width,
+            "volume_profile_val": lo + left * width}
+
+
 def _last(seq: Sequence[Any]) -> Any:
     return seq[-1] if seq else None
 
@@ -307,6 +413,9 @@ class TechnicalAnalysisEngine(Engine):
         cci = _cci(high, low, close)
         st = _supertrend(high, low, close, atr)
         ichi = _ichimoku(high, low)
+        adx_data = _adx(high, low, close)
+        psar_data = _parabolic_sar(high, low)
+        profile = _volume_profile(high, low, close, vol)
 
         bbm = _last(bb_mid); bbs = _last(bb_std)
         last = {
@@ -339,6 +448,12 @@ class TechnicalAnalysisEngine(Engine):
             "volume_last": _f(vol[-1]),
             "volume_sma20": _f(_last(vol_sma20)),
             "volume_ratio": _f((vol[-1] / vol_sma20[-1]) if vol_sma20 and vol_sma20[-1] not in (None, 0) else None),
+            "adx14": _f(_last(adx_data["adx14"])),
+            "plus_di14": _f(_last(adx_data["plus_di14"])),
+            "minus_di14": _f(_last(adx_data["minus_di14"])),
+            "parabolic_sar": _f(_last(psar_data["parabolic_sar"])),
+            "parabolic_sar_direction": _last(psar_data["parabolic_sar_direction"]),
+            **profile,
         }
 
         signals: list[str] = []
@@ -358,6 +473,14 @@ class TechnicalAnalysisEngine(Engine):
             elif c < last["ema200"]: signals.append("price_below_ema200")
         if last["vwap"] is not None:
             signals.append("price_above_vwap" if c > last["vwap"] else "price_below_vwap")
+        if last["parabolic_sar_direction"] in {"bullish","bearish"}:
+            signals.append("parabolic_sar_" + last["parabolic_sar_direction"])
+        if last["adx14"] is not None and last["adx14"] >= 20:
+            if last["plus_di14"] is not None and last["minus_di14"] is not None:
+                if last["plus_di14"] > last["minus_di14"]: signals.append("adx_trend_bullish")
+                elif last["minus_di14"] > last["plus_di14"]: signals.append("adx_trend_bearish")
+        if last["volume_profile_poc"] is not None:
+            signals.append("volume_profile_above_poc" if c > last["volume_profile_poc"] else "volume_profile_below_poc")
         if last["supertrend_direction"] in {"bullish","bearish"}:
             signals.append("supertrend_" + last["supertrend_direction"])
         if last["ichimoku_span_a"] is not None and last["ichimoku_span_b"] is not None:
