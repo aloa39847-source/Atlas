@@ -97,6 +97,21 @@ def test_live_status_performs_read_only_account_and_permission_checks(monkeypatc
                      ("GET", "/sapi/v1/account/apiRestrictions", True)]
 
 
+def test_futures_exchange_info_does_not_send_unsupported_symbol_parameter(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=False, environment="testnet", market="futures",
+    ))
+    calls = []
+    expected = {"symbols": [{"symbol": "BTCUSDT", "status": "TRADING"}]}
+    def fake_request(method, path, signed=False, params=None):
+        calls.append((method, path, signed, dict(params or {})))
+        return expected
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.get_exchange_info("BTC/USDT")
+    assert result == expected
+    assert calls == [("GET", "/fapi/v1/exchangeInfo", False, {})]
+
+
 def test_testnet_account_read_does_not_claim_api_key_trade_permission(monkeypatch):
     adapter = BinanceTestnetAdapter(BinanceConfig(
         enabled=True, environment="testnet", market="spot",
