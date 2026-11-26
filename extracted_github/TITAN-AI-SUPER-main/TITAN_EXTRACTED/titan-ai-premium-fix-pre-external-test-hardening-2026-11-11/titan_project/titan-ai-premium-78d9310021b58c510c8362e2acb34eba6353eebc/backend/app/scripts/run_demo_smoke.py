@@ -115,7 +115,7 @@ def main() -> int:
         round_trips.extend([
             _run_deterministic_shadow_round_trip(
                 db, shadow, market="futures", symbol="ETH/USDT", side="buy",
-                entry=2_000.0, exit_price=2_010.0, quantity=0.05, leverage=2.0,
+                entry=2_000.0, exit_price=2_010.0, quantity=0.03, leverage=2.0,
             ),
             _run_deterministic_shadow_round_trip(
                 db, shadow, market="futures", symbol="BNB/USDT", side="sell",
