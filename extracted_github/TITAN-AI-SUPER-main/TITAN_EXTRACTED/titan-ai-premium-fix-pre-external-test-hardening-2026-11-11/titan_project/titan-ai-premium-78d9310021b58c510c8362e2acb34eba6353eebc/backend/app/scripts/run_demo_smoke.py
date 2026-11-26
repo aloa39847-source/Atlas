@@ -103,7 +103,7 @@ def main() -> int:
         round_trips = [
             _run_deterministic_shadow_round_trip(
                 db, shadow, market="spot", symbol="BTC/USDT", side="buy",
-                entry=50_000.0, exit_price=50_100.0, quantity=0.01,
+                entry=50_000.0, exit_price=50_100.0, quantity=0.002,
             ),
         ]
 
