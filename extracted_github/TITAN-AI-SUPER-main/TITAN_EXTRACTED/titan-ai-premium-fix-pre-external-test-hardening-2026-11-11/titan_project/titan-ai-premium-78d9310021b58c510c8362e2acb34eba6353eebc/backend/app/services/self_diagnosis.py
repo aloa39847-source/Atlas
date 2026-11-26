@@ -176,10 +176,57 @@ class SelfDiagnosisEngine:
             return {"status": "error", "detail": str(e)}
 
     def _check_strategies(self, db) -> dict[str, Any]:
+        """Check strategy registry integrity and report maturity without overstating completion."""
         try:
             from app.services.core_service import core_service
-            strs = core_service.strategies()
-            return {"status": "ok", "detail": f"{len(strs)} strategies"}
+
+            strategies = core_service.strategies()
+            if not strategies:
+                return {"status": "error", "detail": "No trading strategies are registered."}
+
+            maturity_counts: dict[str, int] = {}
+            duplicate_keys: list[str] = []
+            seen_keys: set[str] = set()
+            invalid_entries: list[str] = []
+            for item in strategies:
+                if not isinstance(item, dict):
+                    invalid_entries.append("non_object_strategy")
+                    continue
+                key = str(item.get("key") or "").strip()
+                maturity = str(item.get("status") or "unknown").strip().lower()
+                if not key:
+                    invalid_entries.append("strategy_missing_key")
+                elif key in seen_keys:
+                    duplicate_keys.append(key)
+                seen_keys.add(key)
+                maturity_counts[maturity] = maturity_counts.get(maturity, 0) + 1
+                if maturity not in {"implemented", "ready"}:
+                    invalid_entries.append(f"{key or 'unknown'}:{maturity}")
+
+            if duplicate_keys or invalid_entries:
+                return {
+                    "status": "error" if duplicate_keys or any(
+                        entry.endswith(":unknown") or entry.endswith(":not_implemented")
+                        for entry in invalid_entries
+                    ) else "warning",
+                    "detail": (
+                        f"{len(strategies)} strategies registered; "
+                        f"{len(duplicate_keys)} duplicate keys; "
+                        f"{len(invalid_entries)} partial, unverified, or invalid entries."
+                    ),
+                    "maturity_counts": maturity_counts,
+                    "duplicate_keys": sorted(set(duplicate_keys)),
+                    "partial_or_invalid": invalid_entries[:30],
+                    "verified_complete_count": maturity_counts.get("implemented", 0) + maturity_counts.get("ready", 0),
+                }
+
+            return {
+                "status": "ok",
+                "detail": f"{len(strategies)} registered strategies have unique keys and implemented status.",
+                "maturity_counts": maturity_counts,
+                "verified_complete_count": len(strategies),
+                "partial_or_invalid": [],
+            }
         except Exception as e:
             return {"status": "error", "detail": str(e)}
 
