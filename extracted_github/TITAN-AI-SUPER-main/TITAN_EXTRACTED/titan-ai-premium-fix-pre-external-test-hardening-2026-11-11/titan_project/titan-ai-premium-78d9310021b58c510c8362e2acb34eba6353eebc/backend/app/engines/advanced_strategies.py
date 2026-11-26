@@ -27,6 +27,7 @@ ADVANCED_STRATEGIES = [
     {"key": "order_book_imbalance", "name": "Order Book Imbalance", "category": "order_flow", "markets": ["spot", "futures"], "status": "implemented_partial"},
     {"key": "cumulative_volume_delta", "name": "Cumulative Volume Delta", "category": "order_flow", "markets": ["spot", "futures"], "status": "implemented_partial"},
     {"key": "momentum_burst", "name": "Momentum Burst", "category": "momentum", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "ict_smc_model", "name": "ICT Trading Model", "category": "ict_smc", "markets": ["spot", "futures"], "status": "implemented_partial"},
 ]
 
 
@@ -64,12 +65,12 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
     def structure(frame):
         item = tf.get(frame)
         return getattr(item, "structure", {}) or {} if item else {}
-    def add(key, direction, evidence):
+    def add(key, direction, evidence, min_score=3):
         meta = next(x for x in ADVANCED_STRATEGIES if x["key"] == key)
         clean = sorted(set(str(x) for x in evidence if x))
         score = len(clean)
         return {"key": key, "name": meta["name"], "score": score, "direction": direction,
-                "evidence": clean, "qualified": score >= 3}
+                "evidence": clean, "qualified": score >= min_score}
     out = []
     now = datetime.now(timezone.utc)
     # ADX and PSAR are calculated by TechnicalAnalysisEngine; absence never creates a signal.
@@ -226,5 +227,56 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
         ev=["m5_m15_macd_alignment","m5_volume_expansion","higher_timeframe_bias"]
         if trend("5m")==bias and trend("15m")==bias: ev.append("entry_trend_alignment")
     out.append(add("momentum_burst",direction,ev))
+
+    # ICT model: HTF dealing bias + liquidity raid + MSS/CHOCH + displacement + FVG.
+    # OTE and kill-zone add confluence when supplied by the closed-candle/context pipeline;
+    # they are not fabricated from missing data and are not mandatory in 24/7 crypto markets.
+    ict_evidence = []
+    ict_direction = bias if bias in {"bullish", "bearish"} else "neutral"
+    aligned_htf = [frame for frame in ("1d", "4h", "1h") if trend(frame) == ict_direction]
+    if ict_direction in {"bullish", "bearish"} and len(aligned_htf) >= 2:
+        ict_evidence.append("ict_htf_dealing_bias")
+    sweep_found = False
+    mss_found = False
+    fvg_found = False
+    displacement_found = False
+    ote_found = False
+    killzone_found = False
+    for frame in ("15m", "5m"):
+        st = structure(frame)
+        sweeps = st.get("liquidity_sweeps", []) if isinstance(st, dict) else []
+        for row in sweeps[-3:] if isinstance(sweeps, list) else []:
+            if isinstance(row, dict) and row.get("direction") == ict_direction and row.get("status") in {"swept", "confirmed", "valid"}:
+                sweep_found = True
+        shift = st.get("market_structure_shift") if isinstance(st, dict) else None
+        if isinstance(shift, dict) and shift.get("direction") == ict_direction and shift.get("confirmed") is True:
+            mss_found = True
+        direction_signals = {
+            "bullish": {"bullish_choch", "bullish_mss", "bullish_market_structure_shift"},
+            "bearish": {"bearish_choch", "bearish_mss", "bearish_market_structure_shift"},
+        }
+        if direction_signals.get(ict_direction, set()) & sig(frame):
+            mss_found = True
+        gaps = st.get("fair_value_gaps", []) if isinstance(st, dict) else []
+        for row in gaps[-3:] if isinstance(gaps, list) else []:
+            if isinstance(row, dict) and row.get("direction") == ict_direction and row.get("status") == "open":
+                fvg_found = True
+                if row.get("ote_overlap") is True:
+                    ote_found = True
+        if ("bullish_displacement" if ict_direction == "bullish" else "bearish_displacement") in sig(frame):
+            displacement_found = True
+        ctx_ict = ctx.get("ict", {}) if isinstance(ctx, dict) else {}
+        if isinstance(ctx_ict, dict):
+            if ctx_ict.get("direction") == ict_direction and ctx_ict.get("ote_valid") is True:
+                ote_found = True
+            if ctx_ict.get("direction") == ict_direction and ctx_ict.get("killzone_active") is True:
+                killzone_found = True
+    if sweep_found: ict_evidence.append("ict_liquidity_raid")
+    if mss_found: ict_evidence.append("ict_mss_or_choch")
+    if displacement_found: ict_evidence.append("ict_displacement")
+    if fvg_found: ict_evidence.append("ict_fair_value_gap")
+    if ote_found: ict_evidence.append("ict_ote_confluence")
+    if killzone_found: ict_evidence.append("ict_killzone_confluence")
+    out.append(add("ict_smc_model", ict_direction, ict_evidence, min_score=4))
     allowed = {item['key'] for item in ADVANCED_STRATEGIES if market.value in item['markets']}
     return [candidate for candidate in out if candidate['key'] in allowed]
