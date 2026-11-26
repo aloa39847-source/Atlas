@@ -35,11 +35,11 @@ class Settings:
     secret_key: str = field(default_factory=lambda: os.getenv("TITAN_SECRET_KEY", ""))
     database_url: str = field(default_factory=lambda: os.getenv("TITAN_DATABASE_URL", "sqlite:///" + (_PROJECT_ROOT / "backend" / "data" / "titan.db").as_posix()))
 
-    # Live credentials may connect for read-only monitoring. Order execution
-    # remains gated by the user's explicit per-start confirmation in the terminal.
+    # Live execution is disabled by default. Enabling it requires a separate
+    # deployment/security review plus explicit persisted user confirmation.
     default_environment: EnvironmentMode = EnvironmentMode.DEMO
     default_market: MarketType = MarketType.SPOT
-    live_trading_enabled: bool = field(default_factory=lambda: _bool("TITAN_LIVE_TRADING_ENABLED", True))
+    live_trading_enabled: bool = field(default_factory=lambda: _bool("TITAN_LIVE_TRADING_ENABLED", False))
     allow_demo_to_live_auto: bool = False  # MUST remain False
     allow_withdrawal_permissions: bool = False  # MUST remain False
 

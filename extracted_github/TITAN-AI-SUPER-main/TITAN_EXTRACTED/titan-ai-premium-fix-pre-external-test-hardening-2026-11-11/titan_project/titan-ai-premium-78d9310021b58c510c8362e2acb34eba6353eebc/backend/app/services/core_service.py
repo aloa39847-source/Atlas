@@ -252,7 +252,7 @@ class TitanCoreService:
             "safety": {
                 "allow_demo_to_live_auto": settings.allow_demo_to_live_auto,
                 "allow_withdrawal_permissions": settings.allow_withdrawal_permissions,
-                "note": "Verified Binance Testnet connection starts supervised Demo trading automatically. Verified Live connection starts read-only account monitoring and market analysis; real orders require an explicit Live Start confirmation and all server, eligibility, API-permission and risk checks. Withdrawal/transfer permissions are never supported.",
+                "note": "A Binance Testnet account may be authenticated for read-only checks, but its worker remains stopped until API-key TRADE permission is independently validated and the full preflight passes. Live execution is disabled by default and remains read-only until a separate explicit approval and all server, eligibility, API-permission and risk checks pass. Withdrawal/transfer permissions are never supported.",
             },
             "master_control": {
                 "start_requires": ["account_target_selected", "connectivity_or_data_check", "compliance_check", "risk_limits", "no_duplicate_run", "explicit_live_user_confirmation_for_real_account"],

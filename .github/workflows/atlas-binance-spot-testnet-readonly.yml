@@ -1,12 +1,18 @@
 name: Atlas Binance Spot Testnet Read-only Smoke Test
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/atlas-binance-spot-testnet-readonly.yml"
+      - "extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
+      - "extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/**"
   push:
     branches: [main]
     paths:
       - ".github/workflows/atlas-binance-spot-testnet-readonly.yml"
       - "extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
-      - "extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/8ptblr.zip"
+      - "extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc/backend/**"
   workflow_dispatch:
     inputs:
       symbol:
@@ -22,6 +28,9 @@ concurrency:
   group: atlas-binance-spot-testnet-readonly
   cancel-in-progress: false
 
+env:
+  PROJECT_DIR: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
+
 jobs:
   readonly-smoke:
     runs-on: ubuntu-latest
@@ -29,12 +38,11 @@ jobs:
     env:
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
-      TITAN_TESTNET_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
-      TITAN_BINANCE_PUBLIC_DATA_ENABLED: "true"
+      TITAN_TESTNET_SYMBOL: ${{ github.event.inputs.symbol || 'BTCUSDT' }}
       TITAN_LIVE_TRADING_ENABLED: "false"
       BINANCE_TESTNET_MARKET: "spot"
     steps:
-      - name: Checkout current main branch
+      - name: Checkout PR merge ref
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -42,31 +50,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Locate and extract authoritative backend ZIP
+      - name: Select the exact tracked backend used by final packaging
         id: source
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$(find . -type f -name '8ptblr.zip' -print -quit)"
-          test -n "$ZIP"
-          DEST="$RUNNER_TEMP/atlas-spot-testnet-backend"
-          mkdir -p "$DEST"
-          python - "$ZIP" "$DEST" <<'PY'
-          import os, sys, zipfile
-          from pathlib import Path
-          archive, dest = sys.argv[1:]
-          with zipfile.ZipFile(archive) as z:
-              bad = z.testzip()
-              if bad:
-                  raise SystemExit(f"CRC failure: {bad}")
-              z.extractall(dest)
-          roots = [p.parent.parent.parent for p in Path(dest).rglob("core_service.py")
-                   if p.parent.name == "services" and p.parent.parent.name == "app"]
-          if len(roots) != 1 or not (roots[0] / "requirements.txt").is_file():
-              raise SystemExit("Could not uniquely locate the backend root")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"root={roots[0]}\n")
-          PY
+          ROOT="$GITHUB_WORKSPACE/${PROJECT_DIR}/backend"
+          test -f "$ROOT/app/services/core_service.py"
+          test -f "$ROOT/app/integrations/binance_adapter.py"
+          test -f "$ROOT/requirements.txt"
+          printf 'root=%s\n' "$ROOT" >> "$GITHUB_OUTPUT"
 
       - name: Install backend dependencies
         shell: bash
@@ -77,20 +70,94 @@ jobs:
 
       - name: Run offline regression suite
         shell: bash
+        env:
+          # Unit/integration regression tests must use deterministic synthetic
+          # fixtures, never depend on Binance or public-network eligibility.
+          TITAN_BINANCE_PUBLIC_DATA_ENABLED: "false"
         run: |
           set -euo pipefail
           cd "${{ steps.source.outputs.root }}"
           python -m compileall -q app
           pytest -q
 
-      - name: Verify read-only Spot Testnet connectivity and market analysis
+      - name: Configure verified SSH access to the VPS
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_SSH_KEY}"
+          test -n "${VPS_KNOWN_HOSTS}"
+          install -m 700 -d "${RUNNER_TEMP}/atlas-ssh"
+          printf '%s\n' "${VPS_SSH_KEY}" > "${RUNNER_TEMP}/atlas-ssh/id_ed25519"
+          printf '%s\n' "${VPS_KNOWN_HOSTS}" > "${RUNNER_TEMP}/atlas-ssh/known_hosts"
+          chmod 600 "${RUNNER_TEMP}/atlas-ssh/id_ed25519" "${RUNNER_TEMP}/atlas-ssh/known_hosts"
+
+      - name: Verify read-only Spot Testnet connectivity from the VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
+          BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "${VPS_HOST}"
+          test -n "${VPS_USER}"
+          test -n "${BINANCE_TESTNET_API_KEY}"
+          test -n "${BINANCE_TESTNET_API_SECRET}"
+          SSH=(ssh -i "${RUNNER_TEMP}/atlas-ssh/id_ed25519" -o IdentitiesOnly=yes -o UserKnownHostsFile="${RUNNER_TEMP}/atlas-ssh/known_hosts" -o StrictHostKeyChecking=yes)
+          SCP=(scp -i "${RUNNER_TEMP}/atlas-ssh/id_ed25519" -o IdentitiesOnly=yes -o UserKnownHostsFile="${RUNNER_TEMP}/atlas-ssh/known_hosts" -o StrictHostKeyChecking=yes)
+          REMOTE_DIR=".cache/atlas-spot-testnet-${GITHUB_SHA}"
+          ROOT="${{ steps.source.outputs.root }}"
+          SMOKE="$GITHUB_WORKSPACE/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
+          tar -C "$ROOT" -czf "${RUNNER_TEMP}/backend.tar.gz" .
+          printf 'BINANCE_TESTNET_API_KEY=%s\nBINANCE_TESTNET_API_SECRET=%s\nTITAN_TESTNET_SYMBOL=%s\n' "${BINANCE_TESTNET_API_KEY}" "${BINANCE_TESTNET_API_SECRET}" "${TITAN_TESTNET_SYMBOL}" > "${RUNNER_TEMP}/binance-testnet.env"
+          chmod 600 "${RUNNER_TEMP}/binance-testnet.env"
+          "${SSH[@]}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${REMOTE_DIR}'"
+          "${SCP[@]}" "${RUNNER_TEMP}/backend.tar.gz" "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/backend.tar.gz"
+          "${SCP[@]}" "$SMOKE" "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/smoke.py"
+          "${SCP[@]}" "${RUNNER_TEMP}/binance-testnet.env" "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/binance-testnet.env"
+          "${SSH[@]}" "${VPS_USER}@${VPS_HOST}" "bash -s -- '${REMOTE_DIR}'" <<'REMOTE'
+          set -euo pipefail
+          REMOTE_DIR="$HOME/$1"
+          cleanup() { rm -rf "$REMOTE_DIR"; }
+          trap cleanup EXIT
+          cd "$REMOTE_DIR"
+          mkdir -p backend
+          tar -xzf backend.tar.gz -C backend
+          chmod 600 binance-testnet.env
+          sudo -n docker run --rm --network host \
+            --env-file "$REMOTE_DIR/binance-testnet.env" \
+            -e TITAN_LIVE_TRADING_ENABLED=false \
+            -e BINANCE_TESTNET_MARKET=spot \
+            -e TITAN_AUTH_REQUIRED=false \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$REMOTE_DIR/backend:/app:ro" \
+            -v "$REMOTE_DIR/smoke.py:/smoke.py:ro" \
+            -w /app python:3.12-slim sh -lc \
+            'pip install --disable-pip-version-check -r requirements.txt && PYTHONPATH=/app python /smoke.py'
+          REMOTE
+          rm -f "${RUNNER_TEMP}/backend.tar.gz" "${RUNNER_TEMP}/binance-testnet.env"
+
+      - name: Remove temporary VPS test files if the smoke step failed
         if: always()
         shell: bash
         env:
-          PYTHONPATH: ${{ steps.source.outputs.root }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           set -euo pipefail
-          python "$GITHUB_WORKSPACE/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
+          if [ -n "${VPS_HOST}" ] && [ -n "${VPS_USER}" ] && [ -f "${RUNNER_TEMP}/atlas-ssh/id_ed25519" ]; then
+            ssh -i "${RUNNER_TEMP}/atlas-ssh/id_ed25519" -o IdentitiesOnly=yes -o UserKnownHostsFile="${RUNNER_TEMP}/atlas-ssh/known_hosts" -o StrictHostKeyChecking=yes \
+              "${VPS_USER}@${VPS_HOST}" "rm -rf '.cache/atlas-spot-testnet-${GITHUB_SHA}'" || true
+          fi
+
+      - name: Remove temporary SSH material
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/atlas-ssh"
 
       - name: Confirm no order submission occurred
         if: always()

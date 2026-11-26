@@ -26,7 +26,7 @@ from app.core.config import settings
 
 
 SPOT_TESTNET_BASE = "https://testnet.binance.vision"
-FUTURES_TESTNET_BASE = "https://testnet.binancefuture.com"
+FUTURES_TESTNET_BASE = "https://demo-fapi.binance.com"
 SPOT_LIVE_BASE = "https://api.binance.com"
 FUTURES_LIVE_BASE = "https://fapi.binance.com"
 TESTNET_BASES = {SPOT_TESTNET_BASE, FUTURES_TESTNET_BASE}
@@ -117,6 +117,8 @@ class BinanceTestnetAdapter:
         self.gateway = PreTradeOrderGateway()
 
     def _base_url(self) -> str:
+        if self.config.market not in {"spot", "futures"}:
+            raise RuntimeError("unsupported_binance_market")
         if self.config.environment == "live":
             return FUTURES_LIVE_BASE if self.config.market == "futures" else SPOT_LIVE_BASE
         if self.config.environment != "testnet":
@@ -240,6 +242,9 @@ class BinanceTestnetAdapter:
         environment = self.config.environment
         if environment not in {"testnet", "live"}:
             return {"provider": self.name, "configured": False, "connected": False, "error": "unsupported_binance_environment"}
+        if self.config.market not in {"spot", "futures"}:
+            return {"provider": self.name, "environment": environment, "market": self.config.market,
+                    "configured": False, "connected": False, "error": "unsupported_binance_market"}
         configured = bool(self._api_key() and self._api_secret())
         result = {
             "provider": "binance_" + environment,
@@ -247,9 +252,13 @@ class BinanceTestnetAdapter:
             "market": self.config.market,
             "configured": configured,
             "base_url": self._base_url(),
-            "withdrawal_permissions": False,
+            "execution_ready": False,
+            "withdrawal_permissions": False if environment == "testnet" else None,
+            "transfer_permissions": False if environment == "testnet" else None,
             "live_blocked": environment == "live" and not (
-                self.config.live_confirmed_by_user and self.config.live_worker_ready
+                settings.live_trading_enabled
+                and self.config.live_confirmed_by_user
+                and self.config.live_worker_ready
             ),
         }
         if configured:
@@ -258,13 +267,36 @@ class BinanceTestnetAdapter:
                     acct = self._request("GET", "/fapi/v2/account", signed=True)
                 else:
                     acct = self._request("GET", "/api/v3/account", signed=True)
-                result["connected"] = isinstance(acct, dict) and "error" not in acct
-                result["account_check"] = "ok" if result["connected"] else "error"
+                if self.config.market == "futures":
+                    account_payload_valid = (
+                        isinstance(acct, dict) and "error" not in acct
+                        and isinstance(acct.get("assets"), list)
+                        and isinstance(acct.get("positions"), list)
+                        and isinstance(acct.get("canTrade"), bool)
+                    )
+                else:
+                    account_payload_valid = (
+                        isinstance(acct, dict) and "error" not in acct
+                        and isinstance(acct.get("balances"), list)
+                        and isinstance(acct.get("canTrade"), bool)
+                    )
+                result["connected"] = account_payload_valid
+                result["account_check"] = "ok" if account_payload_valid else "invalid_or_error_response"
                 if environment == "testnet" and result["connected"]:
-                    result["trade_permission"] = acct.get("canTrade") is True
-                    result["execution_ready"] = result["trade_permission"]
-                    if not result["trade_permission"]:
-                        result["permission_check"] = "binance_api_key_trade_permission_missing"
+                    # canTrade is an account-level flag, not proof that this
+                    # specific API key has TRADE scope. Spot Testnet exposes no
+                    # SAPI permission endpoint, so read-only checks cannot verify
+                    # key-level trading permission.
+                    result["account_can_trade"] = acct.get("canTrade") is True
+                    result["trade_permission"] = None
+                    result["api_key_trade_permission_verified"] = None
+                    result["execution_ready"] = False
+                    result["execution_readiness_check"] = (
+                        "api_key_trade_permission_requires_explicit_test_order_validation"
+                        if result["account_can_trade"] else "binance_account_trading_disabled"
+                    )
+                    if not result["account_can_trade"]:
+                        result["permission_check"] = "binance_account_trading_disabled"
                 if environment == "live" and result["connected"]:
                     result["trade_permission"] = acct.get("canTrade") is True
                     permissions = self._request("GET", "/sapi/v1/account/apiRestrictions", signed=True)
@@ -292,6 +324,7 @@ class BinanceTestnetAdapter:
                         result["execution_ready"] = bool(
                             result["connected"] and result.get("trade_permission") is True
                             and restriction_error is None
+                            and settings.live_trading_enabled
                             and self.config.live_confirmed_by_user and self.config.live_worker_ready
                         )
             except Exception as e:
@@ -364,6 +397,8 @@ class BinanceTestnetAdapter:
             return {"ok": False, "sent_to_exchange": False,
                     "error": "live_credentials_missing" if self.config.environment == "live" else "testnet_credentials_missing"}
         if self.config.environment == "live":
+            if not settings.live_trading_enabled:
+                return {"ok": False, "sent_to_exchange": False, "error": "live_trading_disabled_by_server"}
             if not self.config.live_confirmed_by_user:
                 return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
             if not self.config.live_worker_ready:
@@ -800,11 +835,11 @@ class BinanceTestnetAdapter:
                 "live": self.config.environment == "live"}
 
     def get_exchange_info(self, symbol: str | None = None) -> dict[str, Any]:
-        params = {}
-        if symbol:
-            params["symbol"] = symbol.replace("/", "")
         if self.config.market == "futures":
-            return self._request("GET", "/fapi/v1/exchangeInfo", signed=False, params=params)
+            # USD-M Futures exchangeInfo has no symbol query parameter.
+            # Fetch the full rules document and select the symbol locally.
+            return self._request("GET", "/fapi/v1/exchangeInfo", signed=False)
+        params = {"symbol": symbol.replace("/", "")} if symbol else {}
         return self._request("GET", "/api/v3/exchangeInfo", signed=False, params=params)
 
     def reconcile(self, local_open_orders: list[dict] | None = None) -> dict[str, Any]:
