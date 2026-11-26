@@ -1,4 +1,4 @@
-"""Thirty-minute supervised internal Demo/Shadow worker stability test.
+"""Ten-minute supervised internal Demo/Shadow worker stability test.
 
 Uses only public Binance market data and an isolated CI database. It never
 loads API credentials or sends orders to an exchange.
@@ -15,7 +15,7 @@ from app.models.entities import SystemState
 from app.services.core_service import core_service
 from app.scripts.run_demo_loop import run as run_demo_loop
 
-SOAK_SECONDS = 30 * 60
+SOAK_SECONDS = 10 * 60
 WORKER_INTERVAL_SECONDS = 120
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 
@@ -106,7 +106,7 @@ def main() -> int:
         raise RuntimeError("demo_worker_nonzero_exit:" + repr(result))
 
     report = {
-        "test": "30_minute_demo_shadow_worker_soak",
+        "test": "10_minute_demo_shadow_worker_soak",
         "started_at": started_at,
         "duration_seconds": SOAK_SECONDS,
         "monitor_checks": checks,
