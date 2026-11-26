@@ -65,7 +65,7 @@ jobs:
           if len(roots) != 1 or not (roots[0] / "requirements.txt").is_file():
               raise SystemExit("Could not uniquely locate the backend root")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"root={roots[0]}\\n")
+              f.write(f"root={roots[0]}\n")
           PY
 
       - name: Install backend dependencies
