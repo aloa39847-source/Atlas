@@ -42,6 +42,7 @@ class SelfDiagnosisEngine:
             ("knowledge", lambda: self._check_knowledge(db)),
             ("learning", lambda: self._check_learning(db)),
             ("ai_providers", lambda: self._check_ai_providers(db)),
+            ("news_sources", self._check_news_sources),
             ("strategies", lambda: self._check_strategies(db)),
             ("decisions", lambda: self._check_decisions(db)),
             ("engines", lambda: self._check_engines(db)),
@@ -171,6 +172,46 @@ class SelfDiagnosisEngine:
                 "connection_tested_count": 0,
                 "local_fallback_connected": False,
                 "configured_provider_count": len(providers),
+            }
+        except Exception as e:
+            return {"status": "error", "detail": str(e)}
+
+    def _check_news_sources(self) -> dict[str, Any]:
+        """Validate the configured official/secondary news source catalogue without network calls."""
+        try:
+            from app.data.public_news import NEWS_FEEDS
+
+            if not isinstance(NEWS_FEEDS, (list, tuple)) or not NEWS_FEEDS:
+                return {"status": "error", "detail": "No public news feeds are configured."}
+            urls = [str(item.get("url") or "").strip() for item in NEWS_FEEDS if isinstance(item, dict)]
+            invalid = [url for url in urls if not url.startswith("https://")]
+            duplicates = sorted({url for url in urls if urls.count(url) > 1})
+            official = [
+                item for item in NEWS_FEEDS
+                if isinstance(item, dict) and item.get("source_type") == "official_primary"
+            ]
+            secondary = [
+                item for item in NEWS_FEEDS
+                if isinstance(item, dict) and item.get("source_type") == "secondary_media"
+            ]
+            if len(urls) != len(NEWS_FEEDS) or invalid or duplicates or not official:
+                return {
+                    "status": "error",
+                    "detail": "News source catalogue contains invalid entries, non-HTTPS URLs, duplicates, or no official primary sources.",
+                    "invalid_url_count": len(invalid),
+                    "duplicate_urls": duplicates[:10],
+                    "official_source_count": len(official),
+                }
+            return {
+                "status": "ok",
+                "detail": (
+                    f"{len(NEWS_FEEDS)} allowlisted HTTPS news feeds configured "
+                    f"({len(official)} official primary, {len(secondary)} secondary); network connectivity not tested."
+                ),
+                "feed_count": len(NEWS_FEEDS),
+                "official_source_count": len(official),
+                "secondary_source_count": len(secondary),
+                "network_checked": False,
             }
         except Exception as e:
             return {"status": "error", "detail": str(e)}
