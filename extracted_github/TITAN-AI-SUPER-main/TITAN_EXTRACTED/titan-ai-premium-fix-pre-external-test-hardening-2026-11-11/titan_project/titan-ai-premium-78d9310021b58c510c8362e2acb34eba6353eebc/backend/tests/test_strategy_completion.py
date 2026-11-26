@@ -340,3 +340,46 @@ def test_fresh_futures_funding_context_qualifies_contrarian_strategy():
     assert funding["qualified"] is True
     assert funding["direction"] == "bearish"
     assert "fresh_funding_rate" in funding["evidence"]
+
+
+def test_cvd_strategy_context_requires_fresh_coherent_public_trade_window():
+    from datetime import datetime, timedelta, timezone
+    from app.services.core_service import TitanCoreService
+
+    now = datetime.now(timezone.utc)
+    snapshot = {
+        "ok": True, "source": "binance_public_read_only", "symbol": "BTCUSDT",
+        "taker_flow_delta_quote": 1250.5,
+        "first_trade_time": (now - timedelta(seconds=30)).isoformat(),
+        "last_trade_time": (now - timedelta(seconds=2)).isoformat(),
+    }
+    result = TitanCoreService._build_cvd_strategy_context(snapshot)
+    cvd = result["cumulative_volume_delta"]
+    assert cvd["cvd_change"] == 1250.5
+    assert cvd["window"] == "recent_public_aggregate_trades"
+
+    stale = {**snapshot, "last_trade_time": (now - timedelta(minutes=3)).isoformat()}
+    assert TitanCoreService._build_cvd_strategy_context(stale) == {}
+
+    wrong_source = {**snapshot, "source": "synthetic"}
+    assert TitanCoreService._build_cvd_strategy_context(wrong_source) == {}
+
+
+def test_fresh_public_cvd_context_qualifies_cvd_strategy():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    context = {
+        "cumulative_volume_delta": {
+            "ok": True, "source": "binance_public_read_only", "symbol": "BTCUSDT",
+            "fetched_at": (now - timedelta(seconds=1)).isoformat(),
+            "cvd_change": 1250.5,
+        }
+    }
+    result = evaluate_strategy_candidates(
+        MarketType.SPOT, "bullish", {}, strategy_context=context,
+        expected_symbol="BTCUSDT",
+    )
+    cvd = next(item for item in result["candidates"] if item["key"] == "cumulative_volume_delta")
+    assert cvd["qualified"] is True
+    assert cvd["direction"] == "bullish"
