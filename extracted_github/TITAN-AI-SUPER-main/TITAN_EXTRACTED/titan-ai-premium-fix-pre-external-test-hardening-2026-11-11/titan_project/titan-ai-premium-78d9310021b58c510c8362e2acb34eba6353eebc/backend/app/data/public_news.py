@@ -22,8 +22,11 @@ _NEWS_CACHE_TTL_SECONDS = 180
 
 
 NEWS_FEEDS = (
-    # Primary / official sources: government regulators and protocol foundations.
+    # Primary / official sources: regulators, central banks, statistical agencies,
+    # and protocol foundations. Official macro releases are useful context for crypto.
     {"name": "SEC Press Releases", "url": "https://www.sec.gov/news/pressreleases.rss", "source_type": "official_primary"},
+    {"name": "Federal Reserve Press Releases", "url": "https://www.federalreserve.gov/feeds/press_all.xml", "source_type": "official_primary"},
+    {"name": "Bureau of Labor Statistics", "url": "https://www.bls.gov/feed/bls_latest.rss", "source_type": "official_primary"},
     {"name": "Ethereum Foundation", "url": "https://blog.ethereum.org/feed.xml", "source_type": "official_primary"},
     # Secondary crypto-news publishers retained for context and cross-checking only.
     {"name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml", "source_type": "secondary_media"},
