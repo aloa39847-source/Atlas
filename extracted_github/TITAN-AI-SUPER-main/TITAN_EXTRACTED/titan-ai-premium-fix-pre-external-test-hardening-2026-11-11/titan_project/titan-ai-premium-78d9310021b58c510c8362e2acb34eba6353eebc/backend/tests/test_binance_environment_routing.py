@@ -97,6 +97,29 @@ def test_live_status_performs_read_only_account_and_permission_checks(monkeypatc
                      ("GET", "/sapi/v1/account/apiRestrictions", True)]
 
 
+def test_testnet_account_read_does_not_claim_api_key_trade_permission(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="spot",
+        api_key_ref="env:BINANCE_TESTNET_API_KEY",
+        api_secret_ref="env:BINANCE_TESTNET_API_SECRET",
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    calls = []
+    def fake_request(method, path, signed=False, params=None):
+        calls.append((method, path, signed))
+        return {"canTrade": True, "balances": []}
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    status = adapter.status()
+    assert status["connected"] is True
+    assert status["account_can_trade"] is True
+    assert status["trade_permission"] is None
+    assert status["api_key_trade_permission_verified"] is None
+    assert status["execution_ready"] is False
+    assert status["execution_readiness_check"] == "api_key_trade_permission_requires_explicit_test_order_validation"
+    assert calls == [("GET", "/api/v3/account", True)]
+
+
 def test_spot_status_rejects_malformed_account_payload(monkeypatch):
     adapter = BinanceTestnetAdapter(BinanceConfig(
         enabled=True, environment="testnet", market="spot",
