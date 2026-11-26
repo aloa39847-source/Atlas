@@ -39,7 +39,10 @@ def _valid_public_context(item, market, symbol, now):
     if symbol and str(item.get("symbol", "")).upper().replace("/", "") != str(symbol).upper().replace("/", ""):
         return False
     try:
-        stamp = datetime.fromisoformat(str(item["fetched_at"]).replace("Z", "+00:00"))
+        stamp_value = item.get("fetched_at") or item.get("last_trade_time") or item.get("timestamp")
+        if not stamp_value:
+            return False
+        stamp = datetime.fromisoformat(str(stamp_value).replace("Z", "+00:00"))
         age = (now - stamp).total_seconds()
         return stamp.tzinfo is not None and 0 <= age <= 120
     except (KeyError, TypeError, ValueError, OverflowError):
