@@ -67,3 +67,22 @@ def test_futures_external_context_rejects_stale_or_untrusted_funding_data():
 def test_spot_does_not_activate_futures_only_funding_strategy():
     result = evaluate_strategy_candidates(MarketType.SPOT, "neutral", timeframe_analyses={})
     assert not any(x["key"] == "funding_rate" for x in result["candidates"])
+
+
+def test_market_neutral_pairs_and_stat_arb_never_become_single_leg_orders():
+    tf = {name: _tf("sideways") for name in ("1d", "4h", "1h", "15m", "5m")}
+    context = {
+        "statistical_arbitrage": {
+            "ok": True, "source": "binance_public_read_only", "symbol": "BTCUSDT",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "direction": "bearish", "z_score": 2.5, "model_valid": True,
+        }
+    }
+    result = evaluate_strategy_candidates(
+        MarketType.SPOT, "neutral", timeframe_analyses=tf,
+        strategy_context=context, expected_symbol="BTCUSDT",
+    )
+    candidate = next(x for x in result["candidates"] if x["key"] == "statistical_arbitrage")
+    assert candidate["qualified"]
+    assert candidate["direction"] == "neutral"
+    assert result["selected"] is None
