@@ -16,6 +16,7 @@ from app.integrations.binance_adapter import (
 
 def test_binance_adapter_selects_isolated_environment_endpoints():
     assert BinanceTestnetAdapter(BinanceConfig(environment="testnet", market="spot"))._base_url() == SPOT_TESTNET_BASE
+    assert FUTURES_TESTNET_BASE == "https://demo-fapi.binance.com"
     assert BinanceTestnetAdapter(BinanceConfig(environment="testnet", market="futures"))._base_url() == FUTURES_TESTNET_BASE
     assert BinanceTestnetAdapter(BinanceConfig(environment="live", market="spot"))._base_url() == SPOT_LIVE_BASE
     assert BinanceTestnetAdapter(BinanceConfig(environment="live", market="futures"))._base_url() == FUTURES_LIVE_BASE
