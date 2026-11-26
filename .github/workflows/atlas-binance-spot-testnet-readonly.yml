@@ -1,0 +1,93 @@
+name: Atlas Binance Spot Testnet Read-only Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Spot symbol to inspect"
+        required: true
+        default: "BTCUSDT"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-binance-spot-testnet-readonly
+  cancel-in-progress: false
+
+jobs:
+  readonly-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
+      BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+      TITAN_TESTNET_SYMBOL: ${{ inputs.symbol }}
+      TITAN_BINANCE_PUBLIC_DATA_ENABLED: "true"
+      TITAN_LIVE_TRADING_ENABLED: "false"
+      BINANCE_TESTNET_MARKET: "spot"
+    steps:
+      - name: Checkout current main branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Locate and extract authoritative backend ZIP
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$(find . -type f -name '8ptblr.zip' -print -quit)"
+          test -n "$ZIP"
+          DEST="$RUNNER_TEMP/atlas-spot-testnet-backend"
+          mkdir -p "$DEST"
+          python - "$ZIP" "$DEST" <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+          archive, dest = sys.argv[1:]
+          with zipfile.ZipFile(archive) as z:
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit(f"CRC failure: {bad}")
+              z.extractall(dest)
+          roots = [p.parent.parent.parent for p in Path(dest).rglob("core_service.py")
+                   if p.parent.name == "services" and p.parent.parent.name == "app"]
+          if len(roots) != 1 or not (roots[0] / "requirements.txt").is_file():
+              raise SystemExit("Could not uniquely locate the backend root")
+          with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"root={roots[0]}\n")
+          PY
+
+      - name: Install backend dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r "${{ steps.source.outputs.root }}/requirements.txt"
+
+      - name: Run offline regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.source.outputs.root }}"
+          python -m compileall -q app
+          pytest -q
+
+      - name: Verify read-only Spot Testnet connectivity and market analysis
+        shell: bash
+        env:
+          PYTHONPATH: ${{ steps.source.outputs.root }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/titan_testnet_readonly_smoke.py
+
+      - name: Confirm no order submission occurred
+        if: always()
+        shell: bash
+        run: |
+          echo "Read-only Spot Testnet smoke only; no order endpoint is called."
+          echo "Order submission is disabled and live trading is disabled."
