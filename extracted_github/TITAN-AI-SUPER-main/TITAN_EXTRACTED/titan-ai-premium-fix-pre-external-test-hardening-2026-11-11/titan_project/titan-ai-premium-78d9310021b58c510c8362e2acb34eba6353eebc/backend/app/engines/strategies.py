@@ -37,6 +37,7 @@ STRATEGIES = [
     {"key": "order_book_imbalance", "name": "Order Book Imbalance", "category": "order_flow", "markets": ["spot", "futures"], "status": "implemented_partial"},
     {"key": "cumulative_volume_delta", "name": "Cumulative Volume Delta", "category": "order_flow", "markets": ["spot", "futures"], "status": "implemented_partial"},
     {"key": "momentum_burst", "name": "Momentum Burst", "category": "momentum", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "ict_smc_model", "name": "ICT Trading Model", "category": "ict_smc", "markets": ["spot", "futures"], "status": "implemented_partial"},
 ]
 
 
