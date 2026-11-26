@@ -149,7 +149,7 @@ class DecisionEngine(Engine):
                  "micro_timeframe_votes": {"bullish": micro_bull, "bearish": micro_bear}}, tf,
             )
 
-        if strategy.get("key") == "scalping_m5":
+        if strategy.get("key") in {"scalping_m5", "vwap_scalping", "momentum_burst"}:
             setup = m5
         elif strategy.get("key") == "swing_h1_h4":
             setup = h1 or h4
