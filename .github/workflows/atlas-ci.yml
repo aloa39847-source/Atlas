@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: atlas-ci-${{ github.workflow }}-development
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   PROJECT_DIR: extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/titan_project/titan-ai-premium-78d9310021b58c510c8362e2acb34eba6353eebc
