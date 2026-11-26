@@ -116,12 +116,14 @@ def test_news_engine_maps_more_assets_and_avoids_ambiguous_lowercase_tickers():
 
 
 def test_news_symbol_filter_requires_exact_uppercase_ticker_or_project_name():
+    from datetime import datetime, timezone
     engine = NewsAnalysisEngine()
+    now = datetime.now(timezone.utc).isoformat()
     generic = engine.analyze_items([
-        {"title": "Click the link to continue", "summary": "A common word only."},
+        {"title": "Click the link to continue", "summary": "A common word only.", "published_at": now},
     ], keyword="LINK")
     project = engine.analyze_items([
-        {"title": "Chainlink partnership announcement", "summary": "New integration."},
+        {"title": "Chainlink partnership announcement", "summary": "New integration.", "published_at": now},
     ], keyword="LINK")
     assert generic["count"] == 0
     assert project["count"] == 1
@@ -143,3 +145,24 @@ def test_news_engine_accepts_only_timezone_aware_items_within_60_minutes():
     assert result["items"][0]["freshness"] == "fresh"
     assert result["max_age_minutes"] == 60
     assert result["rejected_stale_or_undated_count"] == 4
+
+
+def test_atom_updated_timestamp_does_not_replace_missing_original_publication_time(monkeypatch):
+    from io import BytesIO
+    from app.data.public_news import NEWS_FEEDS
+
+    atom = b'''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>Bitcoin old story republished</title>
+      <link href="https://news.example.test/old" />
+      <updated>2026-11-26T03:00:00Z</updated>
+    </entry></feed>'''
+    class FakeOpener:
+        def open(self, request, timeout):
+            return Response(atom)
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: FakeOpener())
+    rows = PublicRSSNewsProvider(feeds=(NEWS_FEEDS[1],))._fetch_feed(NEWS_FEEDS[1])
+    assert len(rows) == 1
+    assert rows[0]["published_at"] is None
+    analyzed = NewsAnalysisEngine().analyze_items(rows)
+    assert analyzed["count"] == 0
+    assert analyzed["rejected_stale_or_undated_count"] == 1
