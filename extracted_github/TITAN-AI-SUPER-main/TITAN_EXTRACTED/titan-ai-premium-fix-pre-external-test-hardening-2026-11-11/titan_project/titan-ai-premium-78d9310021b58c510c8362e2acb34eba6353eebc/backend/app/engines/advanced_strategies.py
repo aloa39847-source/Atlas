@@ -196,7 +196,7 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
             if isinstance(delta, (int, float)) and math.isfinite(delta):
                 direction = "bullish" if delta > 0 else "bearish" if delta < 0 else "neutral"
         ev=[]
-        if valid and direction in {"bullish","bearish"} and direction==bias:
+        if valid and direction in {"bullish","bearish"} and (direction == bias or key == "statistical_arbitrage"):
             if key=="funding_rate" and isinstance(item.get("funding_rate"),(int,float)) and abs(item["funding_rate"])>=0.0001:
                 ev=["fresh_funding_rate","crowded_side_identified","contrarian_bias_confirmed"]
             elif key=="open_interest_divergence" and isinstance(item.get("open_interest_change_pct"),(int,float)) and isinstance(item.get("price_change_pct"),(int,float)) and abs(item["open_interest_change_pct"])>=1 and item["open_interest_change_pct"]*item["price_change_pct"]<0:
