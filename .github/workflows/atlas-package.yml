@@ -23,26 +23,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: Package all tracked project files, including recovered
+      - name: Package tracked project files, including recovered, without nested ZIPs
         shell: bash
         run: |
           set -euo pipefail
           test -d "$PROJECT_DIR"
-          git ls-files "$PROJECT_DIR" | grep -viE '\.zip
-          test -s "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
-          unzip -t "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
-          file_count="$(unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | wc -l)"
-          test "$file_count" -gt 100
-          if unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | grep -qiE '\.zip
-          sha256sum "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
-      - name: Upload the single final ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: ATLAS_AUTONOMOUS_TRADER_FINAL
-          path: ATLAS_AUTONOMOUS_TRADER_FINAL.zip
-          if-no-files-found: error
-          retention-days: 30
- | sed "s#^$PROJECT_DIR/##" | (
+          git ls-files "$PROJECT_DIR" | grep -viE '\\.zip$' | sed "s#^$PROJECT_DIR/##" | (
             cd "$PROJECT_DIR"
             zip -q -X "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" -@
           )
@@ -50,16 +36,7 @@ jobs:
           unzip -t "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
           file_count="$(unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | wc -l)"
           test "$file_count" -gt 100
-          echo "ARCHIVE_FILE_COUNT=$file_count"
-          sha256sum "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
-      - name: Upload the single final ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: ATLAS_AUTONOMOUS_TRADER_FINAL
-          path: ATLAS_AUTONOMOUS_TRADER_FINAL.zip
-          if-no-files-found: error
-          retention-days: 30
-; then
+          if unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | grep -qiE '\\.zip$'; then
             echo "Unexpected nested ZIP found in final project archive" >&2
             exit 1
           fi
@@ -70,23 +47,6 @@ jobs:
           fi
           echo "ARCHIVE_FILE_COUNT=$file_count"
           echo "RECOVERED_FILE_COUNT=$recovered_expected"
-          sha256sum "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
-      - name: Upload the single final ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: ATLAS_AUTONOMOUS_TRADER_FINAL
-          path: ATLAS_AUTONOMOUS_TRADER_FINAL.zip
-          if-no-files-found: error
-          retention-days: 30
- | sed "s#^$PROJECT_DIR/##" | (
-            cd "$PROJECT_DIR"
-            zip -q -X "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" -@
-          )
-          test -s "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
-          unzip -t "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
-          file_count="$(unzip -Z1 "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip" | wc -l)"
-          test "$file_count" -gt 100
-          echo "ARCHIVE_FILE_COUNT=$file_count"
           sha256sum "$GITHUB_WORKSPACE/ATLAS_AUTONOMOUS_TRADER_FINAL.zip"
       - name: Upload the single final ZIP
         uses: actions/upload-artifact@v4
