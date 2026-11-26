@@ -89,8 +89,13 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
             psar = i.get("parabolic_sar")
             close = i.get("close")
             psar_direction = i.get("parabolic_sar_direction")
-            if isinstance(psar, (int, float)) and isinstance(close, (int, float)) and psar_direction in {"bullish", "bearish"} and psar_direction == direction
-                    and ((direction == "bullish" and psar < close) or (direction == "bearish" and psar > close)):
+            if (
+                isinstance(psar, (int, float))
+                and isinstance(close, (int, float))
+                and psar_direction in {"bullish", "bearish"}
+                and psar_direction == direction
+                and ((direction == "bullish" and psar < close) or (direction == "bearish" and psar > close))
+            ):
                 evidence += ["psar_direction_match", "price_on_correct_side"]
                 if abs(close - psar) / max(close, 1e-12) <= 0.03:
                     evidence.append("psar_risk_distance_acceptable")
