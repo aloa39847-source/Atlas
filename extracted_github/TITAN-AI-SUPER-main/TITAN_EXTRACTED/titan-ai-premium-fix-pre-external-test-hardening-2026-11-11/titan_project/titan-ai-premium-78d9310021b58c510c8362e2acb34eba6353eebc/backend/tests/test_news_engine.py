@@ -27,8 +27,8 @@ def test_public_rss_provider_parses_and_deduplicates_allowlisted_feeds(monkeypat
 
     result = PublicRSSNewsProvider().fetch(limit=20)
     assert result["ok"] is True
-    assert result["successful_sources"] == 6
-    assert len(calls) == 6
+    assert result["successful_sources"] == len(NEWS_FEEDS)
+    assert len(calls) == len(NEWS_FEEDS)
     assert len(result["items"]) == 3
     assert result["items"][0]["title"].startswith("Bitcoin ETF approval")
     assert result["items"][0]["published_at"].startswith("2026-11-08")
