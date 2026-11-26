@@ -582,6 +582,55 @@ class TitanCoreService:
             return {}
 
     @staticmethod
+    def _build_open_interest_strategy_context(symbol: str, market: MarketType, data_source: str) -> dict[str, Any]:
+        """Build a fresh, closed-candle price/OI divergence candidate from public Futures data."""
+        if market != MarketType.FUTURES or data_source != "binance_public":
+            return {}
+        try:
+            from app.data.binance_futures_public import BinanceFuturesPublicData
+
+            adapter = BinanceFuturesPublicData()
+            history = adapter.get_open_interest_history(symbol, period="5m", limit=3)
+            candles = adapter.get_klines(symbol, interval="5m", limit=3)
+            if len(history) < 2 or len(candles) < 3:
+                return {}
+            previous, latest = history[-2], history[-1]
+            # Ignore the currently-forming candle; compare the two latest closed candles.
+            previous_candle, latest_candle = candles[-3], candles[-2]
+            stamps = (int(latest["timestamp"]), int(latest_candle[6]))
+            now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+            if any(stamp <= 0 or now_ms - stamp < -60_000 or now_ms - stamp > 10 * 60_000 for stamp in stamps):
+                return {}
+            oi_previous = float(previous["open_interest"])
+            oi_latest = float(latest["open_interest"])
+            close_previous = float(previous_candle[4])
+            close_latest = float(latest_candle[4])
+            if not all(math.isfinite(value) and value > 0 for value in (
+                oi_previous, oi_latest, close_previous, close_latest
+            )):
+                return {}
+            oi_change = (oi_latest / oi_previous - 1.0) * 100.0
+            price_change = (close_latest / close_previous - 1.0) * 100.0
+            if not math.isfinite(oi_change) or not math.isfinite(price_change):
+                return {}
+            direction = "bearish" if price_change > 0 else "bullish" if price_change < 0 else "neutral"
+            return {
+                "open_interest": {
+                    "ok": True,
+                    "source": "binance_futures_public_read_only",
+                    "symbol": str(latest.get("symbol") or symbol).replace("/", "").upper(),
+                    "fetched_at": datetime.fromtimestamp(max(stamps) / 1000.0, timezone.utc).isoformat(),
+                    "open_interest_change_pct": oi_change,
+                    "price_change_pct": price_change,
+                    "direction": direction,
+                    "window": "two_latest_closed_5m_candles",
+                }
+            }
+        except Exception:
+            # A missing/stale OI snapshot suppresses only this candidate.
+            return {}
+
+    @staticmethod
     def _build_cvd_strategy_context(order_flow: dict[str, Any] | None) -> dict[str, Any]:
         """Expose a fresh, reconciled aggregate-trade delta as a bounded CVD candidate input."""
         if not isinstance(order_flow, dict) or order_flow.get("ok") is not True:
@@ -739,6 +788,7 @@ class TitanCoreService:
         strategy_memory = build_strategy_memory_context(db)
         strategy_context = self._build_strategy_context(symbol, market, data_source)
         strategy_context.update(self._build_cvd_strategy_context(order_flow if microstructure_analysis.get("status") != "not_available" else None))
+        strategy_context.update(self._build_open_interest_strategy_context(symbol, market, data_source))
         result = self.decision.decide(
             symbol=symbol, market=market, environment=env,
             timeframe_analyses={Timeframe(k): v for k, v in analyses.items()},
