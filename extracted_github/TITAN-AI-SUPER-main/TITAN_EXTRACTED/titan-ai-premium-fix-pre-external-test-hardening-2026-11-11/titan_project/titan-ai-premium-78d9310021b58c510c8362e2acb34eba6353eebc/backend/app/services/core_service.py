@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib
 import math
 from typing import Any
 
@@ -69,7 +70,7 @@ ENGINE_INTEGRATION_MAP = {
     "decision_making": {"mode": "decision_pipeline", "integration": "TitanCoreService.analyze -> DecisionEngine.decide", "decision_evidence": True, "authority": "final_deterministic_decision"},
     "risk_management": {"mode": "independent_guardrail", "integration": "DecisionEngine RiskEngine plus supervised worker risk checks", "decision_evidence": True, "authority": "independent_veto"},
     "portfolio_management": {"mode": "decision_pipeline", "integration": "Open-position exposure/count checks before decision sizing", "decision_evidence": True, "authority": "exposure_guardrail"},
-    "trade_execution": {"mode": "supervised_execution", "integration": "Binance execution service via supervised trading worker", "decision_evidence": False, "authority": "worker_only_testnet_policy"},
+    "trade_execution": {"mode": "supervised_execution", "integration": "Binance execution service via supervised trading worker", "decision_evidence": False, "authority": "supervised_worker_only_explicit_live_start_confirmation"},
     "position_management": {"mode": "position_lifecycle", "integration": "Persistent position ledger and supervised exchange reconciliation", "decision_evidence": False, "authority": "no_independent_order_authority"},
     "backtesting": {"mode": "on_demand", "integration": "BacktestEngine and portfolio backtest endpoints", "decision_evidence": False, "authority": "simulation_only"},
     "ai_learning": {"mode": "learning_context", "integration": "Historical outcome memory supplied to DecisionEngine and learning APIs", "decision_evidence": True, "authority": "advisory_no_auto_strategy_change"},
@@ -80,6 +81,94 @@ ENGINE_INTEGRATION_MAP = {
     "prediction_tracking": {"mode": "post_prediction_lifecycle", "integration": "PredictionTrackerService evaluation of matured predictions", "decision_evidence": False, "authority": "evaluation_only"},
     "system_monitoring": {"mode": "monitoring", "integration": "System health, engine registry and operational diagnostics endpoints", "decision_evidence": False, "authority": "monitoring_only"},
 }
+
+# Import/callable contracts for every registered engine. These checks verify
+# that the declared adapter exists and is callable; they do not claim that an
+# external exchange, provider, or data feed is currently connected.
+ENGINE_RUNTIME_CONTRACTS = {
+    "compliance_policy": ["app.engines.compliance:compliance_engine.check_order_action"],
+    "market_analysis": [
+        "app.engines.market_data:MarketDataEngine.get_public_multi_timeframe",
+        "app.engines.technical:TechnicalAnalysisEngine.analyze",
+        "app.engines.decision:DecisionEngine.decide",
+    ],
+    "technical_analysis": ["app.engines.technical:TechnicalAnalysisEngine.analyze"],
+    "fundamental_analysis": [
+        "app.engines.fundamental:FundamentalAnalysisEngine.fetch_and_analyze",
+        "app.engines.fundamental:FundamentalAnalysisEngine.fetch_protocol_and_analyze",
+    ],
+    "news_analysis": ["app.engines.news:NewsAnalysisEngine.fetch_and_analyze"],
+    "market_structure": ["app.engines.technical:TechnicalAnalysisEngine.analyze"],
+    "liquidity_analysis": ["app.engines.liquidity:LiquidityAnalysisEngine.fetch_and_analyze"],
+    "order_flow": ["app.engines.order_flow:OrderFlowEngine.fetch_and_analyze"],
+    "volume_analysis": ["app.engines.technical:TechnicalAnalysisEngine.analyze"],
+    "coin_discovery": ["app.services.smart_scanner:SmartScannerService.scan"],
+    "arbitrage_analysis": ["app.engines.arbitrage:ArbitrageAnalysisEngine.fetch_and_analyze"],
+    "strategy_selection": ["app.engines.strategies:evaluate_strategy_candidates"],
+    "decision_making": ["app.engines.decision:DecisionEngine.decide"],
+    "risk_management": ["app.engines.risk:RiskEngine.validate_trade"],
+    "portfolio_management": [
+        "app.services.shadow_trading:ShadowTradingService.get_portfolio",
+        "app.services.shadow_trading:ShadowTradingService.create_shadow_order",
+    ],
+    "trade_execution": [
+        "app.services.binance_execution:BinanceExecutionService.preflight",
+        "app.services.binance_execution:BinanceExecutionService.execute_order",
+    ],
+    "position_management": [
+        "app.services.binance_trading_worker:_manage_positions",
+        "app.services.position_manager:PositionRiskManager.evaluate_positions",
+    ],
+    "backtesting": ["app.engines.backtest:BacktestEngine.run"],
+    "ai_learning": ["app.learning.outcomes:build_strategy_memory_context"],
+    "self_evolution": [
+        "app.learning.persistent:PersistentStrategyLearning.create_proposal",
+        "app.learning.persistent:PersistentStrategyLearning.validate_walk_forward",
+    ],
+    "knowledge_base": [
+        "app.knowledge.base:list_concepts",
+        "app.knowledge.base:categories",
+    ],
+    "long_term_memory": ["app.learning.outcomes:build_strategy_memory_context"],
+    "performance_evaluation": ["app.services.performance_analytics:PerformanceAnalyticsService.evaluate"],
+    "prediction_tracking": ["app.services.prediction_tracker:PredictionTrackerService.evaluate_matured"],
+    "system_monitoring": ["app.services.self_diagnosis:SelfDiagnosisEngine.run_full_check"],
+}
+
+
+def inspect_engine_runtime_contract(engine_key: str) -> dict[str, Any]:
+    """Resolve an engine's declared import/callable contract without side effects."""
+    contracts = ENGINE_RUNTIME_CONTRACTS.get(engine_key)
+    if not contracts:
+        return {
+            "status": "unmapped",
+            "checks": [],
+            "scope": "import_and_callable_only",
+            "note": "No runtime contract is declared for this registered engine.",
+        }
+    checks = []
+    for contract in contracts:
+        module_name, symbol_path = contract.split(":", 1)
+        try:
+            target: Any = importlib.import_module(module_name)
+            for part in symbol_path.split("."):
+                target = getattr(target, part)
+            ok = callable(target)
+            checks.append({"contract": contract, "ok": ok,
+                           **({} if ok else {"error": "target_not_callable"})})
+        except Exception as exc:
+            checks.append({"contract": contract, "ok": False,
+                           "error": type(exc).__name__})
+    passed = sum(1 for item in checks if item["ok"])
+    return {
+        "status": "wired" if passed == len(checks) else "broken",
+        "checks": checks,
+        "passed": passed,
+        "total": len(checks),
+        "scope": "import_and_callable_only",
+        "note": "Callable contract only; live credentials, external connectivity, and end-to-end behavior require separate tests.",
+    }
+
 
 
 def _utcnow():
@@ -177,6 +266,12 @@ class TitanCoreService:
                   live_confirm: bool | None = None) -> dict[str, Any]:
         s = self._state(db)
         old = self.get_state(db)
+        requested_live = (
+            str(account_target or "").strip().lower() == "live"
+            or str(environment_mode or "").strip().lower() == EnvironmentMode.LIVE.value
+        )
+        if requested_live and live_confirm is True and not bool(settings.live_trading_enabled):
+            raise ValueError("live_trading_disabled_by_server")
         if account_target:
             at = str(account_target).strip().lower()
             if at not in {"demo", "testnet", "live"}:
@@ -344,6 +439,8 @@ class TitanCoreService:
             target = str(account_target).strip().lower()
             if target not in {"demo", "testnet", "live"}:
                 raise ValueError("account_target_must_be_demo_testnet_or_live")
+            if target == "live" and not bool(settings.live_trading_enabled):
+                raise ValueError("live_trading_disabled_by_server")
             self.set_state(
                 db, account_target=target,
                 live_confirm=(live_confirm if target == "live" else None),
@@ -353,6 +450,11 @@ class TitanCoreService:
             self.set_state(db, account_target="live", live_confirm=True)
             s = self._state(db)
         target = str(getattr(s, "account_target", "demo") or "demo").lower()
+        if target == "live" and (
+            not bool(settings.live_trading_enabled)
+            or not bool(getattr(s, "live_trading_enabled", False))
+        ):
+            raise ValueError("live_trading_disabled_by_server")
         market = str(s.market_type or "spot").lower()
         if target not in {"demo", "testnet", "live"}:
             raise ValueError("unsupported_account_target")
@@ -439,7 +541,7 @@ class TitanCoreService:
     def engines(self, db: Session) -> list[dict[str, Any]]:
         self._state(db)
         rows = db.execute(select(EngineState).order_by(EngineState.engine_key)).scalars().all()
-        return [{"key": r.engine_key, "name": r.name, "status": r.status, "message": r.message, "updated_at": r.updated_at.isoformat() if r.updated_at else None} for r in rows]
+        return [{"key": r.engine_key, "name": r.name, "status": r.status, "message": r.message, "runtime_check": inspect_engine_runtime_contract(r.engine_key), "integration": ENGINE_INTEGRATION_MAP.get(r.engine_key, {"mode": "unmapped", "integration": "No verified runtime integration mapping", "decision_evidence": False, "authority": "none"}), "updated_at": r.updated_at.isoformat() if r.updated_at else None} for r in rows]
 
     def strategies(self) -> list[dict[str, Any]]:
         return list_strategies()
@@ -677,6 +779,7 @@ class TitanCoreService:
                 ),
                 "details": {
                     **(r.details or {}),
+                    "runtime_check": inspect_engine_runtime_contract(r.engine_key),
                     "lifecycle_control": "managed_by_trading_supervisor" if r.engine_key == "trade_execution" else "not_implemented",
                     "integration": ENGINE_INTEGRATION_MAP.get(r.engine_key, {
                         "mode": "unmapped", "integration": "No verified runtime integration mapping",

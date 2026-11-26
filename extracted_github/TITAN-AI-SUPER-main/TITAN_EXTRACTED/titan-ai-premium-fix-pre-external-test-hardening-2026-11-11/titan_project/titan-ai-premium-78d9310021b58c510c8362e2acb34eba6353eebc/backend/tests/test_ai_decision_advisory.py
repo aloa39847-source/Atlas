@@ -12,10 +12,11 @@ def test_decision_advisory_is_inactive_without_openai_or_local_fallback(monkeypa
         "status": "not_configured", "action_authority": "none",
         "decision_modified": False, "advisors": [], "advice_count": 0,
         "primary_provider": None, "fallback_used": False,
+        "attempted_count": 0, "secondary_cloud_providers_ignored": 0,
     }
 
 
-def test_openai_is_the_primary_evaluator_and_other_cloud_providers_are_not_used(monkeypatch):
+def test_all_enabled_analysis_cloud_providers_are_invoked_in_priority_order(monkeypatch):
     openai_primary = SimpleNamespace(enabled=True, provider="openai", model="gpt-model", tasks=["news"])
     openai_backup = SimpleNamespace(enabled=True, provider="openai", model="backup-model", tasks=["analysis"])
     other_cloud = SimpleNamespace(enabled=True, provider="anthropic", model="other-model", tasks=["analysis"])
@@ -34,11 +35,14 @@ def test_openai_is_the_primary_evaluator_and_other_cloud_providers_are_not_used(
 
     result = ai_providers.evaluate_decision_advisory(object(), {"decision": {"action": "wait"}})
 
-    assert cloud_calls == [("openai", "backup-model", "analysis")]
+    assert cloud_calls == [("openai", "backup-model", "analysis"), ("anthropic", "other-model", "analysis")]
     assert local_calls == []
     assert result["primary_provider"] == "openai"
     assert result["fallback_used"] is False
-    assert result["secondary_cloud_providers_ignored"] == 1
+    assert result["secondary_cloud_providers_ignored"] == 0
+    assert result["attempted_count"] == 2
+    assert result["advice_count"] == 2
+    assert result["advisors"][1]["role"] == "independent_advisor"
     assert result["advisors"][0]["role"] == "primary"
     assert result["advisors"][0]["status"] == "completed"
     assert result["action_authority"] == "none"
@@ -73,22 +77,23 @@ def test_local_model_is_used_only_when_openai_primary_is_unavailable(monkeypatch
     }
     result = ai_providers.evaluate_decision_advisory(object(), context)
 
-    assert [call[0] for call in cloud_calls] == ["openai"]
+    assert [call[0] for call in cloud_calls] == ["openai", "anthropic"]
     assert len(local_calls) == 1
     assert cloud_calls[0][2] == local_calls[0]
     assert len(result["analysis_context_sha256"]) == 64
     assert result["analysis_context_preserved"] is True
-    assert result["advisors"][0]["analysis_context_sha256"] == result["advisors"][1]["analysis_context_sha256"]
-    assert usage == [("openai", "analysis", False)]
+    assert result["advisors"][0]["analysis_context_sha256"] == result["advisors"][1]["analysis_context_sha256"] == result["advisors"][2]["analysis_context_sha256"]
+    assert usage == [("openai", "analysis", False), ("anthropic", "analysis", False)]
     assert result["status"] == "completed"
     assert result["advice_count"] == 1
-    assert result["attempted_count"] == 2
+    assert result["attempted_count"] == 3
     assert result["primary_provider"] == "local"
     assert result["fallback_used"] is True
-    assert [item["provider"] for item in result["advisors"]] == ["openai", "local"]
+    assert [item["provider"] for item in result["advisors"]] == ["openai", "anthropic", "local"]
     assert result["advisors"][0]["status"] == "unavailable"
-    assert result["advisors"][1]["role"] == "fallback"
-    assert result["advisors"][1]["status"] == "completed"
+    assert result["advisors"][1]["status"] == "unavailable"
+    assert result["advisors"][2]["role"] == "fallback"
+    assert result["advisors"][2]["status"] == "completed"
     assert result["action_authority"] == "none"
     assert result["decision_modified"] is False
     assert result["final_decision_owner"] == "TITAN"

@@ -123,7 +123,8 @@ class PublicRSSNewsProvider:
             link_node = entry.find("atom:link", ns)
             link = (link_node.attrib.get("href", "") if link_node is not None else "").strip()
             summary = _plain_text(entry.findtext("atom:summary", "", ns) or entry.findtext("atom:content", "", ns))
-            published = _date(entry.findtext("atom:published", "", ns) or entry.findtext("atom:updated", "", ns))
+            # updated is not a substitute for original publication time.
+            published = _date(entry.findtext("atom:published", "", ns))
             if title and link.startswith("https://"):
                 items.append({
                     "title": title, "url": link, "summary": summary,

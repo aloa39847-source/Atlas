@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import math
 
 from app.core.enums import MarketType
+from .advanced_strategies import ADVANCED_STRATEGIES, evaluate_advanced_candidates
 
 
 # Extensible strategy registry (examples + metadata). Not a claim of completeness or profitability.
@@ -16,6 +17,27 @@ STRATEGIES = [
     {"key": "swing_h1_h4", "name": "Swing (H1/H4)", "category": "swing", "markets": ["spot", "futures"], "status": "implemented"},
     {"key": "liquidity_orderflow", "name": "Liquidity/Order Flow", "category": "order_flow", "markets": ["spot", "futures"], "status": "implemented_partial"},
     {"key": "arbitrage", "name": "Triangular Arbitrage (Spot)", "category": "arbitrage", "markets": ["spot"], "status": "implemented_partial"},
+    {"key": "adx_trend", "name": "ADX Trend Strength", "category": "trend", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "ichimoku_cloud", "name": "Ichimoku Cloud", "category": "trend", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "parabolic_sar", "name": "Parabolic SAR", "category": "trend", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "multi_timeframe_trend", "name": "Multi-Timeframe Trend", "category": "trend", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "order_block", "name": "Order Block", "category": "smc", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "fair_value_gap", "name": "Fair Value Gap", "category": "smc", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "liquidity_sweep", "name": "Liquidity Sweep", "category": "smc", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "breaker_block", "name": "Breaker Block", "category": "smc", "markets": ["spot", "futures"], "status": "implemented_partial"},
+    {"key": "premium_discount", "name": "Premium & Discount", "category": "smc", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "volume_profile", "name": "Volume Profile", "category": "volume", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "vwap_reversion", "name": "VWAP Reversion", "category": "mean_reversion", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "funding_rate", "name": "Funding Rate", "category": "derivatives", "markets": ["futures"], "status": "implemented_partial"},
+    {"key": "open_interest_divergence", "name": "Open Interest Divergence", "category": "derivatives", "markets": ["futures"], "status": "implemented_partial"},
+    {"key": "statistical_arbitrage", "name": "Statistical Arbitrage", "category": "arbitrage", "markets": ["spot", "futures"], "status": "implemented_partial"},
+    {"key": "pairs_trading", "name": "Pairs Trading", "category": "arbitrage", "markets": ["spot", "futures"], "status": "implemented_partial"},
+    {"key": "opening_range_breakout", "name": "Opening Range Breakout", "category": "breakout", "markets": ["spot", "futures"], "status": "implemented_partial"},
+    {"key": "vwap_scalping", "name": "VWAP Scalping", "category": "scalping", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "order_book_imbalance", "name": "Order Book Imbalance", "category": "order_flow", "markets": ["spot", "futures"], "status": "implemented_partial"},
+    {"key": "cumulative_volume_delta", "name": "Cumulative Volume Delta", "category": "order_flow", "markets": ["spot", "futures"], "status": "implemented_partial"},
+    {"key": "momentum_burst", "name": "Momentum Burst", "category": "momentum", "markets": ["spot", "futures"], "status": "implemented"},
+    {"key": "ict_smc_model", "name": "ICT Trading Model", "category": "ict_smc", "markets": ["spot", "futures"], "status": "implemented_partial"},
 ]
 
 
@@ -200,6 +222,7 @@ def evaluate_strategy_candidates(
     timeframe_analyses: dict | None = None,
     microstructure_analysis: dict | None = None,
     expected_symbol: str | None = None,
+    strategy_context: dict | None = None,
 ) -> dict:
     """Score every compatible strategy independently and fail closed on weak/conflicting evidence.
 
@@ -375,6 +398,10 @@ def evaluate_strategy_candidates(
         except (KeyError,TypeError,ValueError,OverflowError):
             pass
     add("liquidity_orderflow",flow_score,flow_evidence,bias)
+    candidates.extend(evaluate_advanced_candidates(
+        market, bias, timeframe_analyses=tf, microstructure_analysis=microstructure_analysis,
+        strategy_context=strategy_context, expected_symbol=expected_symbol,
+    ))
     ranked=sorted(candidates,key=lambda x:(x["qualified"],x["score"],x["key"]),reverse=True)
     qualified=[x for x in ranked if x["qualified"] and x["direction"] in {"bullish","bearish"}]
     directions={x["direction"] for x in qualified}

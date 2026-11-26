@@ -81,6 +81,7 @@ class DecisionEngine(Engine):
         max_open_positions: int | None = None,
         news_context: dict[str, Any] | None = None,
         strategy_memory: dict[str, Any] | None = None,
+        strategy_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Multi-timeframe synthesis (1D trend context -> 4H/1H confirmation -> 15M setup -> 5M timing)
         tf = {k.value if hasattr(k, "value") else str(k): v for k, v in timeframe_analyses.items()}
@@ -112,7 +113,7 @@ class DecisionEngine(Engine):
         strategy_evaluation = evaluate_strategy_candidates(
             market, bias, timeframe_analyses=tf,
             microstructure_analysis=microstructure_analysis,
-            expected_symbol=symbol,
+            expected_symbol=symbol, strategy_context=strategy_context,
         )
         selected = strategy_evaluation.get("selected")
         strategy = selected or {
@@ -148,7 +149,7 @@ class DecisionEngine(Engine):
                  "micro_timeframe_votes": {"bullish": micro_bull, "bearish": micro_bear}}, tf,
             )
 
-        if strategy.get("key") == "scalping_m5":
+        if strategy.get("key") in {"scalping_m5", "vwap_scalping", "momentum_burst"}:
             setup = m5
         elif strategy.get("key") == "swing_h1_h4":
             setup = h1 or h4

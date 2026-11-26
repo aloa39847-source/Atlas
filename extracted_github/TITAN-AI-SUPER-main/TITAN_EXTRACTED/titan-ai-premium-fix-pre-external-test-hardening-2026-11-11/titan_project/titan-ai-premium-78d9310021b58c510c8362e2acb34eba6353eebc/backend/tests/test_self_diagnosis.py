@@ -12,18 +12,19 @@ def test_engine_diagnostics_warn_when_registered_engines_are_partial(monkeypatch
 
     monkeypatch.setattr(dbmod, "SessionLocal", lambda: _Closable())
     monkeypatch.setattr(core_service, "engines", lambda db: [
-        {"key": "risk_management", "status": "implemented_partial"},
-        {"key": "news_analysis", "status": "needs_external_service"},
-        {"key": "fundamental_analysis", "status": "not_implemented"},
+        {"key": "risk_management", "status": "implemented_partial", "runtime_check": {"status": "wired"}, "integration": {"mode": "independent_guardrail"}},
+        {"key": "news_analysis", "status": "needs_external_service", "runtime_check": {"status": "wired"}, "integration": {"mode": "decision_pipeline"}},
+        {"key": "fundamental_analysis", "status": "not_implemented", "runtime_check": {"status": "wired"}, "integration": {"mode": "on_demand"}},
     ])
     result = SelfDiagnosisEngine()._check_engines(None)
     assert result["status"] == "warning"
-    assert result["status_counts"] == {
+    assert result["maturity_counts"] == {
         "implemented_partial": 1,
         "needs_external_service": 1,
         "not_implemented": 1,
     }
-    assert "3 not verified ready" in result["detail"]
+    assert result["runtime_wired_count"] == 3
+    assert "Implementation maturity remains partial/not-ready for 3 engines" in result["detail"]
 
 
 def test_engine_diagnostics_accept_only_all_ready_engines(monkeypatch):
@@ -31,11 +32,12 @@ def test_engine_diagnostics_accept_only_all_ready_engines(monkeypatch):
 
     monkeypatch.setattr(dbmod, "SessionLocal", lambda: _Closable())
     monkeypatch.setattr(core_service, "engines", lambda db: [
-        {"key": "risk_management", "status": "ready"},
+        {"key": "risk_management", "status": "ready", "runtime_check": {"status": "wired"}, "integration": {"mode": "independent_guardrail"}},
     ])
     result = SelfDiagnosisEngine()._check_engines(None)
     assert result["status"] == "ok"
-    assert result["status_counts"] == {"ready": 1}
+    assert result["maturity_counts"] == {"ready": 1}
+    assert result["runtime_wired_count"] == 1
 
 
 def test_risk_diagnostics_runs_a_bounded_spot_sizing_check(monkeypatch):
@@ -68,19 +70,43 @@ def test_risk_diagnostics_reports_failed_sizing_check(monkeypatch):
     assert "test_failure" in result["detail"]
 
 
-def test_ai_diagnostics_does_not_treat_non_openai_provider_as_primary(monkeypatch):
+def test_ai_diagnostics_accepts_connection_tested_non_openai_analysis_provider(monkeypatch):
     from app.integrations import ai_providers, local_ai
 
     monkeypatch.setattr(ai_providers, "provider_status", lambda db: {
         "status": "ready", "providers": [
-            {"provider": "anthropic", "enabled": True, "ready": True, "last_test_success": True}
+            {"provider": "anthropic", "enabled": True, "ready": True, "last_test_success": True, "tasks": ["analysis"]}
+        ],
+    })
+    monkeypatch.setattr(local_ai, "local_model_status", lambda: {"enabled": False, "connected": False})
+    result = SelfDiagnosisEngine()._check_ai_providers(None)
+    assert result["status"] == "ok"
+    assert result["primary_provider"] == "anthropic"
+    assert result["cloud_advisor_count"] == 1
+    assert result["connection_tested_count"] == 1
+
+
+
+def test_ai_diagnostics_requires_every_enabled_analysis_advisor_to_be_tested(monkeypatch):
+    from app.integrations import ai_providers, local_ai
+
+    monkeypatch.setattr(ai_providers, "provider_status", lambda db: {
+        "status": "ready", "providers": [
+            {"provider": "deepseek", "enabled": True, "ready": True,
+             "last_test_success": True, "tasks": ["analysis"]},
+            {"provider": "anthropic", "enabled": True, "ready": True,
+             "last_test_success": None, "tasks": ["decision"]},
+            {"provider": "openai", "enabled": True, "ready": True,
+             "last_test_success": True, "tasks": ["news"]},
         ],
     })
     monkeypatch.setattr(local_ai, "local_model_status", lambda: {"enabled": False, "connected": False})
     result = SelfDiagnosisEngine()._check_ai_providers(None)
     assert result["status"] == "warning"
-    assert result["primary_provider"] is None
-    assert "OpenAI primary is not configured" in result["detail"]
+    assert result["primary_provider"] == "deepseek"
+    assert result["cloud_advisor_count"] == 2
+    assert result["connection_tested_count"] == 1
+    assert result["untested_providers"] == ["anthropic"]
 
 
 def test_ai_diagnostics_requires_successful_openai_connection_test(monkeypatch):

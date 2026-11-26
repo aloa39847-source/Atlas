@@ -36,10 +36,12 @@ def test_public_rss_provider_parses_and_deduplicates_allowlisted_feeds(monkeypat
 
 def test_news_engine_tags_sentiment_and_filters_symbol_without_trade_signal():
     engine = NewsAnalysisEngine()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
     items = [
-        {"title": "Bitcoin ETF approval and adoption", "summary": "growth and inflows", "url": "https://a.test/1"},
-        {"title": "Bitcoin hack and exploit", "summary": "breach and investigation", "url": "https://a.test/2"},
-        {"title": "Ethereum upgrade", "summary": "protocol update", "url": "https://a.test/3"},
+        {"title": "Bitcoin ETF approval and adoption", "summary": "growth and inflows", "url": "https://a.test/1", "published_at": now},
+        {"title": "Bitcoin hack and exploit", "summary": "breach and investigation", "url": "https://a.test/2", "published_at": now},
+        {"title": "Ethereum upgrade", "summary": "protocol update", "url": "https://a.test/3", "published_at": now},
     ]
     result = engine.analyze_items(items, keyword="BTC")
     assert result["ok"] is True
@@ -109,18 +111,58 @@ def test_news_engine_maps_more_assets_and_avoids_ambiguous_lowercase_tickers():
     assert result["items"][0]["asset_matches"] == ["LINK"]
     assert "LINK" not in result["items"][1]["asset_matches"]
     assert "BTC" in result["items"][1]["asset_matches"]
-    assert "ADA" in result["items"][2]["asset_matches"]
-    assert result["items"][2]["impact_severity"] == "critical"
-    assert result["items"][2]["freshness"] == "stale"
+    assert len(result["items"]) == 2
+    assert result["rejected_stale_or_undated_count"] == 1
 
 
 def test_news_symbol_filter_requires_exact_uppercase_ticker_or_project_name():
+    from datetime import datetime, timezone
     engine = NewsAnalysisEngine()
+    now = datetime.now(timezone.utc).isoformat()
     generic = engine.analyze_items([
-        {"title": "Click the link to continue", "summary": "A common word only."},
+        {"title": "Click the link to continue", "summary": "A common word only.", "published_at": now},
     ], keyword="LINK")
     project = engine.analyze_items([
-        {"title": "Chainlink partnership announcement", "summary": "New integration."},
+        {"title": "Chainlink partnership announcement", "summary": "New integration.", "published_at": now},
     ], keyword="LINK")
     assert generic["count"] == 0
     assert project["count"] == 1
+
+
+def test_news_engine_accepts_only_timezone_aware_items_within_60_minutes():
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    engine = NewsAnalysisEngine()
+    items = [
+        {"title": "Bitcoin fresh approval", "published_at": (now - timedelta(minutes=59)).isoformat()},
+        {"title": "Bitcoin old approval", "published_at": (now - timedelta(minutes=61)).isoformat()},
+        {"title": "Bitcoin missing timestamp"},
+        {"title": "Bitcoin future approval", "published_at": (now + timedelta(minutes=2)).isoformat()},
+        {"title": "Bitcoin naive timestamp", "published_at": now.replace(tzinfo=None).isoformat()},
+    ]
+    result = engine.analyze_items(items, keyword="BTC")
+    assert result["count"] == 1
+    assert result["items"][0]["freshness"] == "fresh"
+    assert result["max_age_minutes"] == 60
+    assert result["rejected_stale_or_undated_count"] == 4
+
+
+def test_atom_updated_timestamp_does_not_replace_missing_original_publication_time(monkeypatch):
+    from io import BytesIO
+    from app.data.public_news import NEWS_FEEDS
+
+    atom = b'''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>Bitcoin old story republished</title>
+      <link href="https://news.example.test/old" />
+      <updated>2026-11-26T03:00:00Z</updated>
+    </entry></feed>'''
+    class FakeOpener:
+        def open(self, request, timeout):
+            return Response(atom)
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: FakeOpener())
+    rows = PublicRSSNewsProvider(feeds=(NEWS_FEEDS[1],))._fetch_feed(NEWS_FEEDS[1])
+    assert len(rows) == 1
+    assert rows[0]["published_at"] is None
+    analyzed = NewsAnalysisEngine().analyze_items(rows)
+    assert analyzed["count"] == 0
+    assert analyzed["rejected_stale_or_undated_count"] == 1

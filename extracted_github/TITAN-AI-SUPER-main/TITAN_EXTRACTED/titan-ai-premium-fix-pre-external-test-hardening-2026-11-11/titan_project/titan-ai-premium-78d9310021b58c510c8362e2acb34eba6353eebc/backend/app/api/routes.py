@@ -46,7 +46,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db), authorizat
 
 
 class StateUpdate(BaseModel):
-    environment_mode: str | None = Field(None, description="demo|live; Live is blocked by project policy. Binance Testnet is selected separately via account_target.")
+    environment_mode: str | None = Field(None, description="demo|live; Live account monitoring is read-only until explicit Live Start confirmation. Binance Testnet is selected separately via account_target.")
     market_type: str | None = Field(None, description="spot|futures|earn")
     autonomous_enabled: bool | None = None
     emergency_stop: bool | None = None
@@ -125,15 +125,149 @@ def health() -> dict[str, Any]:
 
 @router.get("/system/status")
 def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
-    return {
-        "state": core_service.get_state(db),
-        "engines": core_service.engines(db),
-        "integrations": {
-            "binance": {"status": "needs_external_service", "configured": False, "note": "Configure Demo/Testnet first. No withdrawal/transfer permissions."},
-            "telegram": {"status": "needs_external_service", "configured": False, "note": "Bot token required; protect secrets."},
-            "ai_providers": {"status": "needs_external_service", "configured": False, "note": "Optional; trading decisions must remain grounded in data/risk engines."},
+    """Return sanitized, observed configuration without sending exchange orders."""
+    from app.integrations.ai_providers import provider_status
+    from app.integrations.local_ai import local_model_status
+    from app.services.credentials import load_binance_credentials
+
+    state = core_service.get_state(db)
+    target = str(state.get("account_target") or "demo").lower()
+    market = str(state.get("market_type") or "spot").lower()
+
+    # Credential presence is not a connection test. Never expose decrypted keys.
+    if target in {"testnet", "live"}:
+        try:
+            credentials = load_binance_credentials(environment=target, market=market)
+            configured = bool(credentials.get("configured"))
+        except Exception:
+            configured = False
+        live_server_enabled = bool(settings.live_trading_enabled) if target == "live" else False
+        live_user_confirmed = bool(state.get("live_confirmed_by_user")) if target == "live" else False
+        binance = {
+            "status": "credentials_configured_not_connected" if configured else "needs_credentials",
+            "configured": configured,
+            "account_target": target,
+            "market": market,
+            "connection_checked": False,
+            "orders_submitted": False,
+            "server_live_enabled": live_server_enabled,
+            "user_live_confirmed": live_user_confirmed,
+            "live_start_required": target == "live" and not live_user_confirmed,
+            "execution_ready": False,
+            "note": (
+                "Live credentials are for read-only monitoring until Live Start is explicitly confirmed for this run; "
+                "server enablement and all execution/risk checks are also required."
+                if target == "live" else
+                "Testnet credentials are stored separately; this status request does not submit orders."
+            ),
+        }
+    else:
+        binance = {
+            "status": "demo_shadow",
+            "configured": False,
+            "account_target": "demo",
+            "market": market,
+            "connection_checked": False,
+            "orders_submitted": False,
+            "note": "Demo/Shadow mode does not require private Binance credentials.",
+        }
+
+    # All enabled analysis advisors are listed; readiness and successful
+    # connection tests are reported separately.
+    try:
+        ai_snapshot = provider_status(db)
+        provider_rows = ai_snapshot.get("providers") or []
+    except Exception:
+        provider_rows = []
+    analysis_rows = []
+    for item in provider_rows:
+        if not item.get("enabled"):
+            continue
+        tasks = item.get("tasks") or []
+        if tasks and not {str(task).strip().lower() for task in tasks}.intersection(
+            {"analysis", "decision", "trading_analysis"}
+        ):
+            continue
+        analysis_rows.append(item)
+    try:
+        local = local_model_status()
+    except Exception:
+        local = {"enabled": False, "connected": False, "model_available": False, "status": "unavailable"}
+    local_ready = bool(
+        local.get("enabled") is True
+        and local.get("connected") is True
+        and local.get("model_available") is True
+    )
+    tested_count = sum(
+        1 for item in analysis_rows
+        if item.get("ready") and item.get("last_test_success") is True
+    )
+    if analysis_rows and tested_count == len(analysis_rows):
+        ai_status = "connection_tested"
+    elif analysis_rows:
+        ai_status = "configured_not_fully_tested"
+    elif local_ready:
+        ai_status = "local_only_fallback"
+    else:
+        ai_status = "not_configured"
+    ai = {
+        "status": ai_status,
+        "configured": bool(analysis_rows),
+        "enabled_analysis_advisors": len(analysis_rows),
+        "connection_tested_count": tested_count,
+        "providers": [
+            {
+                "provider": item.get("provider"),
+                "model": item.get("model"),
+                "enabled": bool(item.get("enabled")),
+                "tasks": item.get("tasks") or [],
+                "key_configured": bool(item.get("key_configured")),
+                "connection_tested": item.get("last_test_success") is True,
+            }
+            for item in provider_rows
+        ],
+        "local_model": {
+            "enabled": bool(local.get("enabled")),
+            "connected": bool(local.get("connected")),
+            "model_available": bool(local.get("model_available")),
+            "model": local.get("model"),
+            "status": local.get("status"),
+            "api_key_required": False,
         },
-        "data_policy": {"live_market_data": False, "synthetic_labeled_available": True, "note": "UI/API must never present synthetic data as real market data."},
+        "action_authority": "none",
+        "note": "AI providers are read-only advisors; deterministic TITAN decision and risk engines retain authority.",
+    }
+
+    telegram_configured = bool(
+        str(settings.telegram_bot_token or "").strip()
+        and str(settings.telegram_allowed_chat_ids or "").strip()
+    )
+    integrations = {
+        "binance": binance,
+        "telegram": {
+            "status": "configured_not_connection_tested" if telegram_configured else "needs_external_service",
+            "configured": telegram_configured,
+            "connection_checked": False,
+            "note": "Bot token and allowed chat IDs are required; secrets are never returned.",
+        },
+        "ai_providers": ai,
+    }
+    return {
+        "state": state,
+        "engines": core_service.engines(db),
+        "integrations": integrations,
+        "data_policy": {
+            "live_market_data": False,
+            "public_market_data_supported": True,
+            "public_market_data_provider": "Binance public Spot and USD-M Futures endpoints",
+            "connection_checked": False,
+            "synthetic_labeled_available": True,
+            "note": (
+                "This status request does not probe market-feed connectivity. Public read-only Binance "
+                "data is supported; analysis validates source provenance, market type, timeframe and freshness. "
+                "Synthetic data remains explicitly labeled and cannot authorize exchange orders."
+            ),
+        },
     }
 
 

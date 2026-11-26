@@ -71,7 +71,7 @@ def test_provider_status_includes_disabled_providers_without_marking_them_ready(
     assert "configured-secret" not in str(result)
 
 
-def test_decision_advisory_uses_openai_only_as_primary_without_trade_authority(monkeypatch):
+def test_decision_advisory_invokes_all_enabled_analysis_advisors_without_trade_authority(monkeypatch):
     providers = [
         SimpleNamespace(enabled=True, provider="openai", model="gpt-test", tasks=["analysis"]),
         SimpleNamespace(enabled=True, provider="deepseek", model="deepseek-chat", tasks=["decision"]),
@@ -92,17 +92,19 @@ def test_decision_advisory_uses_openai_only_as_primary_without_trade_authority(m
     monkeypatch.setattr(ai_providers, "record_usage", lambda *args: None)
     result = ai_providers.evaluate_decision_advisory(object(), {"action": "buy"})
 
-    assert [call[0] for call in calls] == ["openai"]
+    assert [call[0] for call in calls] == ["openai", "deepseek"]
     assert all(call[1] == "analysis" for call in calls)
     assert "NO authority" in calls[0][2] and "TITAN owns the final decision" in calls[0][2]
-    assert result["advice_count"] == 1
-    assert result["attempted_count"] == 1
+    assert result["advice_count"] == 2
+    assert result["attempted_count"] == 2
     assert result["primary_provider"] == "openai"
-    assert result["secondary_cloud_providers_ignored"] == 1
+    assert result["secondary_cloud_providers_ignored"] == 0
     assert result["action_authority"] == "none"
     assert result["decision_modified"] is False
     assert result["final_decision_owner"] == "TITAN"
-    assert {item["provider"] for item in result["advisors"]} == {"openai"}
+    assert {item["provider"] for item in result["advisors"]} == {"openai", "deepseek"}
+    assert result["advisors"][0]["role"] == "primary"
+    assert result["advisors"][1]["role"] == "independent_advisor"
 
 
 def test_decision_advisory_uses_local_fallback_when_openai_fails(monkeypatch):
@@ -126,11 +128,13 @@ def test_decision_advisory_uses_local_fallback_when_openai_fails(monkeypatch):
 
     assert result["status"] == "completed"
     assert result["advice_count"] == 1
-    assert result["attempted_count"] == 2
+    assert result["attempted_count"] == 3
     assert result["primary_provider"] == "local"
     assert result["fallback_used"] is True
     assert result["advisors"][0]["status"] == "unavailable"
-    assert result["advisors"][1]["status"] == "completed"
+    assert result["advisors"][1]["status"] == "unavailable"
+    assert result["advisors"][2]["status"] == "completed"
+    assert result["advisors"][2]["role"] == "fallback"
     assert result["action_authority"] == "none"
     assert result["decision_modified"] is False
 

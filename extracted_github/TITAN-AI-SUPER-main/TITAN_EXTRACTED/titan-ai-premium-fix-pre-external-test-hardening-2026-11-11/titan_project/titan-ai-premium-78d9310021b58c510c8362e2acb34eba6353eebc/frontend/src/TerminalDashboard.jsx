@@ -10,15 +10,31 @@ import FundamentalsPanel from './FundamentalsPanel'
 import EconomicCalendarPanel from './EconomicCalendarPanel'
 import MLResearchPanel from './MLResearchPanel'
 import TelegramPanel from './TelegramPanel'
+import RiskSimulationPanel from './RiskSimulationPanel'
+import FuturesOrderbookHistoryPanel from './FuturesOrderbookHistoryPanel'
 
 const PAIRS = ['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','DOGEUSDT']
 const FRAMES = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w','1M']
 const NAV = [
   ['home','الرئيسية','⌂'],['trade','التداول','▥'],['scanner','الماسح الذكي','⌕'],
+  ['microstructure','بنية السوق','⌁'],['arbitrage','المراجحة','⇄'],
+  ['fundamentals','التحليل الأساسي','◉'],['calendar','الأجندة الاقتصادية','◷'],
   ['ai','التحليل الذكي','✧'],['strategies','الاستراتيجيات','◈'],['risk','المخاطر','⬡'],
   ['portfolio','المحفظة','▣'],['reports','التقارير','▤'],['settings','الإعدادات','⚙']
 ]
 const fmt = (v, d=2) => Number.isFinite(Number(v)) ? Number(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}) : '—'
+function createIdempotencyKey() {
+  const cryptoApi = globalThis.crypto
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID()
+  if (typeof cryptoApi?.getRandomValues !== 'function') {
+    throw new Error('هذا المتصفح لا يوفر مولداً آمناً لمفتاح منع تكرار الأمر؛ لم يتم إرسال الطلب.')
+  }
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`
+}
 
 function Panel({title,children,extra,className=''}) {
   return <section className={`tt-panel ${className}`}><div className="tt-panel-head"><strong>{title}</strong>{extra}</div>{children}</section>
@@ -78,7 +94,7 @@ export default function TerminalDashboard() {
       const e = ['testnet','live'].includes(target) ? target : (s?.state?.environment_mode || 'demo')
       setMarket(m)
       setSelectedTarget(target)
-      if(s?.state?.live_confirmed_by_user===true) setLiveApproval(true)
+      setLiveApproval(s?.state?.live_confirmed_by_user===true)
       try { setPortfolio(await api.portfolio(e,m)) } catch { setPortfolio(null) }
     } catch (e) { setMessage('تعذر الاتصال بخادم TITAN: '+e.message) }
   },[market])
@@ -460,7 +476,7 @@ export default function TerminalDashboard() {
         environment_mode:'demo',market_type:market,symbol:symbol.replace(/USDT$/,'/USDT'),
         side:market==='futures'?(orderSide==='buy'?'long':'short'):orderSide,
         order_type:orderType,quantity:Number(quantity),price:orderType==='limit'?Number(limitPrice||price):price,
-        leverage:1,simulate:'fill',fill_ratio:1,idempotency_key:crypto.randomUUID()
+        leverage:1,simulate:'fill',fill_ratio:1,idempotency_key:createIdempotencyKey()
       })
       setMessage(result.ok?'تم تسجيل أمر Shadow التجريبي.':JSON.stringify(result))
       await refreshSystem()
@@ -482,7 +498,7 @@ export default function TerminalDashboard() {
   const balance=portfolio?.snapshot?.equity_estimate ?? portfolio?.snapshot?.balance ?? null
   const positions=portfolio?.positions||[]
   const engineItems=Array.isArray(status?.engines)?status.engines:[]
-  const enabledEngineCount=engineItems.filter(item=>['ready','healthy','active','ok'].includes(String(item.status||'').toLowerCase())).length
+  const runtimeWiredEngineCount=engineItems.filter(item=>String(item.runtime_check?.status||'').toLowerCase()==='wired').length
   const asks=(book?.asks||[]).filter(x=>Array.isArray(x)&&Number.isFinite(Number(x[0]))&&Number.isFinite(Number(x[1]))&&Number(x[0])>0&&Number(x[1])>0).sort((a,b)=>Number(a[0])-Number(b[0]))
   const bids=(book?.bids||[]).filter(x=>Array.isArray(x)&&Number.isFinite(Number(x[0]))&&Number.isFinite(Number(x[1]))&&Number(x[0])>0&&Number(x[1])>0).sort((a,b)=>Number(b[0])-Number(a[0]))
   const selectedLabel=symbol.replace('USDT','/USDT')
@@ -495,7 +511,7 @@ export default function TerminalDashboard() {
   return <main className="tt-app" dir="rtl">
     <header className="tt-header">
       <div className="tt-brand"><div className="tt-crown">♛</div><div><h1>TITAN</h1><b>SUPER AI PREMIUM</b></div><span className="tt-tagline">تحليل أعمق · قرارات أذكى · تداول أكثر أماناً</span></div>
-      <div className="tt-header-right"><Status ok={!!status}> {status?'SYSTEM CONNECTED':'API DISCONNECTED'} </Status><Status ok={streamStatus==='connected'}> BINANCE STREAM {streamStatus==='connected'?'LIVE':streamStatus.toUpperCase()} </Status><span className="tt-exchange">BINANCE {status?.state?.account_target==='live'?'LIVE BLOCKED':status?.state?.account_target==='testnet'? ( ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) ? 'TESTNET AUTO' : 'TESTNET'):'DEMO'}</span><button className="tt-icon-btn" onClick={refreshSystem} title="تحديث النظام">⟳</button>{auth.me?.authenticated&&<button className="tt-icon-btn" onClick={onLogout} title="تسجيل الخروج">خروج</button>}</div>
+      <div className="tt-header-right"><Status ok={!!status}> {status?'SYSTEM CONNECTED':'API DISCONNECTED'} </Status><Status ok={streamStatus==='connected'}> BINANCE STREAM {streamStatus==='connected'?'LIVE':streamStatus.toUpperCase()} </Status><span className="tt-exchange">BINANCE {status?.state?.account_target==='live'?(status?.integrations?.binance?.server_live_enabled===true&&status?.state?.live_confirmed_by_user===true&&['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)?'LIVE AUTO':'LIVE READ-ONLY'):status?.state?.account_target==='testnet'? ( ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) ? 'TESTNET AUTO' : 'TESTNET'):'DEMO'}</span><button className="tt-icon-btn" onClick={refreshSystem} title="تحديث النظام">⟳</button>{auth.me?.authenticated&&<button className="tt-icon-btn" onClick={onLogout} title="تسجيل الخروج">خروج</button>}</div>
     </header>
 
     <nav className="tt-nav">{NAV.map(([id,label,icon])=><button key={id} className={tab===id?'selected':''} onClick={()=>navClick(id)}><span>{icon}</span>{label}</button>)}</nav>
@@ -521,7 +537,7 @@ export default function TerminalDashboard() {
       </Panel>
       <Panel title="TITAN AI ANALYST" className="tt-ai">
         <div className="tt-ai-orb">✧</div><Status ok={!!analysisReady(status)}> {analysisReady(status)?'اتصال النظام متاح':'بانتظار بيانات النظام'} </Status>
-        <div className="tt-ai-line"><span>محركات بحالة جاهزة</span><b>{enabledEngineCount}/{engineItems.length}</b></div>
+        <div className="tt-ai-line"><span>عقود ربط المحركات المتحققة</span><b>{runtimeWiredEngineCount}/{engineItems.length}</b></div>
         <div className="tt-ai-line"><span>حالة التشغيل</span><b>{status?.state?.bot_run_state||'غير معروف'}</b></div>
         <div className="tt-ai-line"><span>آخر قرار محفوظ</span><b>{latestDecision?.action||'لا يوجد سجل قرار'}</b></div>
         <div className="tt-ai-line"><span>رمز القرار</span><b>{latestDecision?.symbol||'—'}</b></div>
@@ -580,6 +596,10 @@ export default function TerminalDashboard() {
     </div>}
 
     {tab==='scanner'&&<SmartScanner market={market} balance={balance??150} maxLeverage={3}/>}
+    {tab==='microstructure'&&<MarketMicrostructurePanel/>}
+    {tab==='arbitrage'&&<ArbitragePanel/>}
+    {tab==='fundamentals'&&<FundamentalsPanel/>}
+    {tab==='calendar'&&<EconomicCalendarPanel/>}
     {tab==='ai'&&<div className="tt-feature-grid"><Panel title="محادثة TITAN AI">
       <div className="tt-chat">{chat.map((m,i)=><p key={i}><b>{m.role==='user'?'أنت':'TITAN'}:</b> {m.text}</p>)}</div>
       <form onSubmit={sendChat} className="tt-chat-form"><input value={chatInput} onChange={e=>setChatInput(e.target.value)} placeholder="اسأل TITAN عن السوق أو قراراته أو تقاريره..." /><button className="tt-primary">إرسال</button></form>
@@ -588,7 +608,7 @@ export default function TerminalDashboard() {
       </div>
     </Panel>
     <Panel title="حالة المحركات الفعلية">
-      {engineItems.length?engineItems.map(engine=><div className="tt-ai-line" key={engine.key}><span>{engine.name||engine.key}</span><b>{engine.status||'غير محدد'}</b></div>):<p className="tt-muted">لم يرجع الخادم سجلاً لحالة المحركات.</p>}
+      {engineItems.length?engineItems.map(engine=><div className="tt-ai-line" key={engine.key}><span>{engine.name||engine.key}<small>{engine.integration?.mode||'غير مصنف'}</small></span><b>{engine.status||'غير محدد'} · {engine.runtime_check?.status==='wired'?'الربط سليم':engine.runtime_check?.status||'غير مفحوص'}</b></div>):<p className="tt-muted">لم يرجع الخادم سجلاً لحالة المحركات.</p>}<p className="tt-muted">فحص الربط يتحقق من وجود الدوال المطلوبة؛ ولا يثبت وحده اتصال البورصة أو مزود خارجي.</p>
     </Panel>
     <Panel title="مزودو الذكاء الاصطناعي">
       {aiProviderState?.items?.length?aiProviderState.items.map(provider=><div className="tt-provider-row" key={provider.id}>
@@ -597,10 +617,10 @@ export default function TerminalDashboard() {
       </div>):<p className="tt-muted">لا توجد إعدادات مزود خارجي محفوظة. لن تظهر حالة مزود غير مهيأ على أنه متصل.</p>}
     </Panel>
     </div>}
-    {tab==='strategies'&&<div className="tt-feature-grid"><BacktestPanel/><MLResearchPanel/></div>}
-    {tab==='risk'&&<div className="tt-feature-grid"><Panel title="حالة الحماية وإدارة المخاطر"><pre>{JSON.stringify({state:status?.state,integrations:status?.integrations},null,2)}</pre><button className="tt-primary" onClick={()=>master('start')} disabled={busy || (selectedTarget==='live' && !liveApproval) || (['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) && !(selectedTarget==='live' && status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button><button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button><button className="tt-danger" onClick={()=>master('emergency')} disabled={busy}>إيقاف الطوارئ</button></Panel><Panel title="التشخيص الذاتي"><button className="tt-primary" onClick={runDiagnosis} disabled={busy}>تشغيل التشخيص</button>{diagnosis&&<pre>{JSON.stringify(diagnosis,null,2)}</pre>}</Panel></div>}
+    {tab==='strategies'&&<div className="tt-feature-grid"><BacktestPanel/><MLResearchPanel/><FuturesOrderbookHistoryPanel/></div>}
+    {tab==='risk'&&<div className="tt-feature-grid"><Panel title="حالة الحماية وإدارة المخاطر"><pre>{JSON.stringify({state:status?.state,integrations:status?.integrations},null,2)}</pre><button className="tt-primary" onClick={()=>master('start')} disabled={busy || (selectedTarget==='live' && (!liveApproval || status?.integrations?.binance?.server_live_enabled!==true)) || (['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) && !(selectedTarget==='live' && status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button><button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button><button className="tt-danger" onClick={()=>master('emergency')} disabled={busy}>إيقاف الطوارئ</button></Panel><Panel title="التشخيص الذاتي"><button className="tt-primary" onClick={runDiagnosis} disabled={busy}>تشغيل التشخيص</button>{diagnosis&&<pre>{JSON.stringify(diagnosis,null,2)}</pre>}</Panel><RiskSimulationPanel/></div>}
     {tab==='portfolio'&&<div className="tt-feature-grid"><Panel title="المحفظة الداخلية"><h2>{balance===null?'—':fmt(balance)+' USDT'}</h2><button className="tt-secondary" onClick={refreshSystem}>تحديث</button><pre>{JSON.stringify(portfolio,null,2)}</pre></Panel><PerformancePanel/></div>}
-    {tab==='reports'&&<div className="tt-feature-grid"><PerformancePanel/><MarketMicrostructurePanel/></div>}
+    {tab==='reports'&&<div className="tt-feature-grid"><PerformancePanel/></div>}
     {tab==='settings'&&<div className="tt-feature-grid"><Panel title="حساب Binance والتداول">
       <label>الحساب المستهدف</label><select value={selectedTarget} onChange={e=>{setSelectedTarget(e.target.value);setLiveApproval(false)}} disabled={['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}><option value="demo">Demo داخلي (Shadow)</option><option value="testnet">Binance Demo / Testnet (تداول آلي تجريبي)</option><option value="live">Binance Live (البدء بموافقتك فقط)</option></select>
       <label>السوق</label><select value={market} onChange={e=>setMarket(e.target.value)} disabled={['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}><option value="spot">Spot</option><option value="futures">USD-M Futures</option></select>
@@ -616,7 +636,7 @@ export default function TerminalDashboard() {
       <button className="tt-secondary" onClick={deleteLegacyLiveKeys} disabled={busy||!accountHealth?.liveCreds?.configured}>حذف مفاتيح Live لهذا السوق</button>
       {selectedTarget==='live'&&<label className="tt-consent-row"><input type="checkbox" checked={liveApproval} onChange={e=>setLiveApproval(e.target.checked)} disabled={busy||(['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)&&status?.state?.live_confirmed_by_user===true)}/> <b>مسموح ببدء التداول الحقيقي</b><small>{'ربط المفاتيح يتيح قراءة الحساب والتحليل فقط. لن تُرسل أي صفقة حقيقية حتى تفعّل هذا الخيار وتضغط «بدء التداول الحقيقي» وتؤكد الموافقة.'}</small></label>}
       <small className="tt-muted">Testnet يبدأ التداول التجريبي تلقائياً بعد نجاح الربط واجتياز فحوص الجاهزية. Live يبقى للقراءة فقط بعد الربط، ويحتاج موافقة صريحة جديدة لكل بدء. زر «إيقاف المحرك بالكامل» يلغي الموافقة ويوقف العامل، لكنه لا يغلق المراكز المفتوحة تلقائياً. زر «إيقاف التداول فقط» يوقف فتح صفقات جديدة مع استمرار إدارة المراكز. لا سحب أو تحويل؛ وتبقى حدود المخاطر والإيقاف الطارئ والمطابقة إلزامية.</small>
-      <button className="tt-primary" onClick={()=>master('start')} disabled={busy||(selectedTarget==='live'&&!liveApproval)||(['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)&&!(selectedTarget==='live'&&status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button>
+      <button className="tt-primary" onClick={()=>master('start')} disabled={busy||(selectedTarget==='live'&&(!liveApproval||status?.integrations?.binance?.server_live_enabled!==true))||(['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)&&!(selectedTarget==='live'&&status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button>
       <button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button>
     </Panel><Panel title="إعدادات TITAN"><div className="tt-ai-line"><span>البيئة</span><b>{status?.state?.environment_mode||'demo'}</b></div><div className="tt-ai-line"><span>السوق</span><b>{market}</b></div><div className="tt-ai-line"><span>المصادقة الثنائية</span><b>{auth.me?.two_factor_enabled?'مفعّلة':'غير مفعّلة'}</b></div>{auth.me?.authenticated&&!auth.me?.two_factor_enabled&&<button className="tt-secondary" disabled={busy} onClick={startTwoFactorSetup}>إعداد تطبيق المصادقة</button>}{twoFactorSetup&&<div className="tt-order-form"><p>أضف هذا المفتاح إلى تطبيق Authenticator:</p><code>{twoFactorSetup.secret}</code><p className="tt-muted">أو استعمل رابط الإعداد داخل تطبيق يدعم QR.</p><input value={twoFactorCode} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} placeholder="رمز من 6 أرقام" onChange={e=>setTwoFactorCode(e.target.value.replace(/\D/g,'').slice(0,6))}/><button className="tt-primary" disabled={busy||twoFactorCode.length!==6} onClick={confirmTwoFactorSetup}>تأكيد وتفعيل 2FA</button></div>}{auth.me?.two_factor_enabled&&<div className="tt-order-form"><input value={twoFactorCode} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} placeholder="رمز المصادقة الحالي" onChange={e=>setTwoFactorCode(e.target.value.replace(/\D/g,'').slice(0,6))}/><button className="tt-secondary" disabled={busy||twoFactorCode.length!==6} onClick={disableTwoFactor}>تعطيل 2FA بعد التحقق</button></div>}<button className="tt-secondary" onClick={refreshSystem}>تحديث الحالة</button><button className="tt-primary" onClick={()=>setTab('risk')}>فتح الحماية والتشخيص</button></Panel><TelegramPanel/></div>}
     <footer className="tt-footer"><b>TITAN SUPER AI PREMIUM</b><span>TRADE SMARTER · TRADE SAFER</span><small>بيانات السوق عامة للقراءة فقط · لا توجد صلاحيات إيداع أو سحب أو تحويل</small></footer>

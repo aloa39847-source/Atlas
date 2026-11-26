@@ -83,7 +83,7 @@ def test_execution_boundary_requires_explicit_live_confirmation_before_sizing(tm
         db.add(SystemState(
             id=1, environment_mode="live", account_target="live", market_type="futures",
             bot_run_state="running", autonomous_enabled=True, emergency_stop=False,
-            live_confirmed_by_user=False, risk_limits={},
+            live_trading_enabled=True, live_confirmed_by_user=False, risk_limits={},
         ))
         db.commit()
         result = binance_execution_service.execute_order(
@@ -582,6 +582,66 @@ def test_core_live_start_accepts_only_explicit_confirmation_and_stays_supervised
         assert state.live_confirmed_by_user is True
         assert state.bot_run_state == "starting"
         assert state.autonomous_enabled is True
+    finally:
+        db.close()
+        engine.dispose()
+
+
+
+def test_live_execution_is_blocked_when_server_live_switch_is_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    engine, db = _execution_test_db(tmp_path)
+    adapter_calls = []
+    try:
+        db.add(SystemState(
+            id=1, environment_mode="live", account_target="live", market_type="spot",
+            bot_run_state="running", autonomous_enabled=True, emergency_stop=False,
+            live_trading_enabled=False, live_confirmed_by_user=True, risk_limits={},
+        ))
+        db.commit()
+        monkeypatch.setattr(
+            binance_execution_service, "adapter_for",
+            lambda *args, **kwargs: adapter_calls.append(True),
+        )
+        preflight = binance_execution_service.preflight(db, live_worker_ready=True)
+        result = binance_execution_service.execute_order(
+            db, symbol="BTCUSDT", side="BUY", order_type="MARKET",
+            quantity=0.001, price=100.0, leverage=1.0, reduce_only=False,
+            idempotency_key="server-live-disabled-01", live_worker_ready=True,
+            order_metadata={"intent": "open", "reference_price": 100.0},
+        )
+        assert preflight["error"] == "live_trading_disabled_by_server"
+        assert preflight["ready"] is False
+        assert result["error"] == "live_trading_disabled_by_server"
+        assert result["sent_to_exchange"] is False
+        assert adapter_calls == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+
+def test_set_state_rejects_live_confirmation_when_server_switch_is_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'live_server_disabled_state.db'}",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    monkeypatch.setattr(dbmod, "engine", engine)
+    monkeypatch.setattr(dbmod, "SessionLocal", factory)
+    monkeypatch.setattr(dbmod, "init_db", lambda: dbmod.Base.metadata.create_all(bind=engine))
+    dbmod.init_db()
+    db = factory()
+    try:
+        core_service.ensure_bootstrap(db)
+        import pytest
+        with pytest.raises(ValueError, match="live_trading_disabled_by_server"):
+            core_service.set_state(db, account_target="live", live_confirm=True)
+        state = db.get(SystemState, 1)
+        assert state.live_confirmed_by_user is False
+        assert state.live_trading_enabled is False
     finally:
         db.close()
         engine.dispose()
