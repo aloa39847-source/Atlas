@@ -339,7 +339,7 @@ def test_testnet_cancel_order_uses_signed_delete_and_exchange_order_identifier(m
     })]
 
 
-def test_live_execution_readiness_needs_only_exchange_permissions_user_confirmation_and_worker(monkeypatch):
+def test_live_status_respects_server_global_kill_switch(monkeypatch):
     monkeypatch.setattr(settings, "live_trading_enabled", False)
     adapter = BinanceTestnetAdapter(BinanceConfig(
         enabled=True, environment="live", market="spot",
@@ -363,8 +363,8 @@ def test_live_execution_readiness_needs_only_exchange_permissions_user_confirmat
     assert status["connected"] is True
     assert status["trade_permission"] is True
     assert status["permissions_verified"] is True
-    assert status["execution_ready"] is True
-    assert status["live_blocked"] is False
+    assert status["execution_ready"] is False
+    assert status["live_blocked"] is True
     assert calls == [("GET", "/api/v3/account", True),
                      ("GET", "/sapi/v1/account/apiRestrictions", True)]
 
