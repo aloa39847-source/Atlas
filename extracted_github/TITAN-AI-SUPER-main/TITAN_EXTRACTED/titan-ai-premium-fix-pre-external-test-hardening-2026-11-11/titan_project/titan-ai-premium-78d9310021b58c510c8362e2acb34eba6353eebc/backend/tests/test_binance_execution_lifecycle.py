@@ -95,7 +95,7 @@ def test_timed_out_testnet_submission_is_unknown_and_never_resent(tmp_path, monk
     engine, db = _session(tmp_path)
     adapter = FakeTestnetAdapter({
         "sent_to_exchange": False,
-        "error": "<urlopen error timed out while waiting for Binance response>",
+        "error": "timed out while waiting for Binance response",
     })
     monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
     monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {"ready": True})
