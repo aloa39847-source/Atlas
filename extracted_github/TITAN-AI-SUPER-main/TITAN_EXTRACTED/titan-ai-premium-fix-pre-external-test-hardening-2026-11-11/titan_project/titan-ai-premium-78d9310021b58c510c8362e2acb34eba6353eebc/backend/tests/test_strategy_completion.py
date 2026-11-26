@@ -383,3 +383,29 @@ def test_fresh_public_cvd_context_qualifies_cvd_strategy():
     cvd = next(item for item in result["candidates"] if item["key"] == "cumulative_volume_delta")
     assert cvd["qualified"] is True
     assert cvd["direction"] == "bullish"
+
+
+def test_futures_open_interest_history_validates_and_sorts_rows(monkeypatch):
+    from app.data.binance_futures_public import BinanceFuturesPublicData
+
+    adapter = BinanceFuturesPublicData()
+    monkeypatch.setattr(adapter, "_get_json", lambda endpoint: [
+        {"timestamp": 2000, "sumOpenInterest": "120", "sumOpenInterestValue": "7200000"},
+        {"timestamp": 1000, "sumOpenInterest": "100", "sumOpenInterestValue": "6000000"},
+    ])
+    rows = adapter.get_open_interest_history("BTCUSDT", period="5m", limit=2)
+    assert [row["timestamp"] for row in rows] == [1000, 2000]
+    assert rows[-1]["source"] == "binance_futures_public_read_only"
+
+
+def test_futures_open_interest_history_rejects_invalid_or_duplicate_rows(monkeypatch):
+    import pytest
+    from app.data.binance_futures_public import BinanceFuturesPublicData
+
+    adapter = BinanceFuturesPublicData()
+    monkeypatch.setattr(adapter, "_get_json", lambda endpoint: [
+        {"timestamp": 1000, "sumOpenInterest": "100", "sumOpenInterestValue": "6000000"},
+        {"timestamp": 1000, "sumOpenInterest": "120", "sumOpenInterestValue": "7200000"},
+    ])
+    with pytest.raises(RuntimeError, match="duplicate_open_interest"):
+        adapter.get_open_interest_history("BTCUSDT", period="5m", limit=2)
