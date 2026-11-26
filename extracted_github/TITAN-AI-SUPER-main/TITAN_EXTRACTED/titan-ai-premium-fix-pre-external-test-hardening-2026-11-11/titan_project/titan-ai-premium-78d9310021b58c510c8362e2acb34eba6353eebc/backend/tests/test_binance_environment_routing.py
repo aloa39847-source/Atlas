@@ -97,6 +97,37 @@ def test_live_status_performs_read_only_account_and_permission_checks(monkeypatc
                      ("GET", "/sapi/v1/account/apiRestrictions", True)]
 
 
+def test_spot_status_rejects_malformed_account_payload(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="spot",
+        api_key_ref="env:BINANCE_TESTNET_API_KEY",
+        api_secret_ref="env:BINANCE_TESTNET_API_SECRET",
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: {"unexpected": "payload"})
+    status = adapter.status()
+    assert status["configured"] is True
+    assert status["connected"] is False
+    assert status["account_check"] == "invalid_or_error_response"
+    assert status["execution_ready"] is False
+
+
+def test_futures_status_rejects_malformed_account_payload(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+        api_key_ref="env:BINANCE_TESTNET_FUTURES_API_KEY",
+        api_secret_ref="env:BINANCE_TESTNET_FUTURES_API_SECRET",
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: {"canTrade": True, "positions": []})
+    status = adapter.status()
+    assert status["configured"] is True
+    assert status["connected"] is False
+    assert status["account_check"] == "invalid_or_error_response"
+    assert status["execution_ready"] is False
+
 
 def test_binance_credentials_are_separated_by_environment_and_market(tmp_path, monkeypatch):
     from app.services import credentials
