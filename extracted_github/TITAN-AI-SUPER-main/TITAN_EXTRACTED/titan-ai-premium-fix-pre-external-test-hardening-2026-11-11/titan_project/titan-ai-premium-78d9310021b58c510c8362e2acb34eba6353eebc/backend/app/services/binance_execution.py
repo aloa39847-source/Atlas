@@ -349,10 +349,24 @@ class BinanceExecutionService:
                 record.client_order_id = str(exchange.get("clientOrderId") or exchange_client_id)
                 record.filled_quantity = float(exchange.get("executedQty", 0) or 0)
                 average_price = float(exchange.get("avgPrice", 0) or 0)
+                raw_cumulative_quote = exchange.get("cummulativeQuoteQty")
+                if raw_cumulative_quote in (None, ""):
+                    raw_cumulative_quote = exchange.get("cumQuote")
+                quote_total = (
+                    float(raw_cumulative_quote)
+                    if raw_cumulative_quote not in (None, "") else None
+                )
                 if average_price <= 0 and record.filled_quantity > 0:
-                    quote_total = float(exchange.get("cummulativeQuoteQty", 0) or 0)
-                    if quote_total > 0:
+                    if quote_total is not None and quote_total > 0:
                         average_price = quote_total / record.filled_quantity
+                if (quote_total is None and record.filled_quantity > 0
+                        and math.isfinite(average_price) and average_price > 0):
+                    quote_total = average_price * record.filled_quantity
+                if quote_total is not None and math.isfinite(quote_total) and quote_total > 0:
+                    execution_meta = dict(record.metadata_json or {})
+                    execution_meta["exchange_cumulative_quote"] = quote_total
+                    execution_meta["exchange_cumulative_quote_estimated"] = raw_cumulative_quote in (None, "")
+                    record.metadata_json = execution_meta
                 record.avg_fill_price = average_price or None
                 fee_accounting = result.get("fee_accounting")
                 if record.filled_quantity > 0 and isinstance(fee_accounting, dict):
