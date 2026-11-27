@@ -387,6 +387,33 @@ export default function TerminalDashboard() {
     } finally { setBusy(false) }
   }
 
+  async function reconcileTestnetOrders() {
+    if(selectedTarget!=='testnet') {
+      setMessage('اختر Binance Testnet أولاً.')
+      return
+    }
+    if(!accountHealth?.testnetCreds?.configured) {
+      setMessage('احفظ مفاتيح Testnet للسوق المحدد أولاً.')
+      return
+    }
+    setBusy(true);setMessage('')
+    try {
+      const result=await api.binanceTestnetReconcile(market)
+      await refreshSystem()
+      await refreshAccountHealth()
+      if(result?.ok===true && result?.orders_submitted===false) {
+        const checked=result?.order_sync?.orders_checked??0
+        const resolved=result?.order_sync?.orders_resolved??0
+        setMessage(`اكتملت المصالحة للقراءة فقط: فُحص ${checked} أمر، وحُسمت حالة ${resolved}. لم يُرسل أي أمر. يظل Emergency Stop كما هو؛ استخدم إعادة الضبط المنفصلة بعد مراجعة الحالة.`)
+      } else {
+        setMessage('المصالحة تتطلب مراجعة يدوية، وتم إبقاء الإيقاف الطارئ عند الحاجة: '+(result?.error||'نتيجة غير مكتملة'))
+      }
+    } catch(e) {
+      await refreshSystem()
+      setMessage('فشلت مصالحة أوامر Testnet: '+e.message)
+    } finally { setBusy(false) }
+  }
+
   async function saveTradingSelection() {
     if(!['demo','testnet','live'].includes(selectedTarget)) {
       setMessage('اختر Demo أو Binance Testnet أو Binance Live.')
@@ -657,6 +684,7 @@ export default function TerminalDashboard() {
       <button className="tt-secondary" onClick={saveTradingSelection} disabled={busy||['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>حفظ اختيار الحساب والسوق</button>
       <button className="tt-secondary" onClick={refreshAccountHealth} disabled={busy}>فحص الاتصال والحالة</button>
       <button className="tt-secondary" onClick={validateTestnetTradePermission} disabled={busy||selectedTarget!=='testnet'||!accountHealth?.testnetCreds?.configured}>تحقق من صلاحية API TRADE دون إرسال أمر</button>
+      <button className="tt-secondary" onClick={reconcileTestnetOrders} disabled={busy||selectedTarget!=='testnet'||!accountHealth?.testnetCreds?.configured||['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>مصالحة حالة أوامر Testnet (قراءة فقط)</button>
       <div className="tt-order-form"><b>مفاتيح Binance Testnet · {market}</b><input type="password" autoComplete="off" placeholder="API Key" value={testnetApiKey} onChange={e=>setTestnetApiKey(e.target.value)}/><input type="password" autoComplete="new-password" placeholder="API Secret" value={testnetApiSecret} onChange={e=>setTestnetApiSecret(e.target.value)}/><button className="tt-secondary" onClick={saveTestnetKeys} disabled={busy||!testnetApiKey||!testnetApiSecret}>حفظ مفاتيح Testnet</button></div>
       <div className="tt-order-form"><b>مفاتيح Binance Live · {market}</b><input type="password" autoComplete="off" placeholder="Live API Key (قراءة أولاً)" value={liveApiKey} onChange={e=>setLiveApiKey(e.target.value)}/><input type="password" autoComplete="new-password" placeholder="Live API Secret" value={liveApiSecret} onChange={e=>setLiveApiSecret(e.target.value)}/><button className="tt-secondary" onClick={saveLiveKeys} disabled={busy||!liveApiKey||!liveApiSecret}>تحقق وحفظ Live للقراءة فقط</button></div>
       <button className="tt-secondary" onClick={deleteLegacyLiveKeys} disabled={busy||!accountHealth?.liveCreds?.configured}>حذف مفاتيح Live لهذا السوق</button>
