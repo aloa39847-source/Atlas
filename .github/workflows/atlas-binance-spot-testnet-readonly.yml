@@ -1,4 +1,4 @@
-name: Atlas Binance Spot Testnet Read-only Smoke Test
+name: Atlas Binance Spot Testnet No-Order Permission Smoke Test
 
 on:
   pull_request:
@@ -163,5 +163,5 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "Read-only Spot Testnet smoke only; no order endpoint is called."
+          echo "Spot Testnet permission smoke: order/test only; no order is submitted to the matching engine."
           echo "Order submission is disabled and live trading is disabled."
