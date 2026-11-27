@@ -1,4 +1,4 @@
-name: Atlas Binance Spot Testnet No-Order Permission Smoke Test
+name: Atlas Binance Spot + Futures Testnet No-Order Permission Smoke Test
 
 on:
   pull_request:
@@ -38,6 +38,8 @@ jobs:
     env:
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+      BINANCE_TESTNET_FUTURES_API_KEY: ${{ secrets.BINANCE_TESTNET_FUTURES_API_KEY }}
+      BINANCE_TESTNET_FUTURES_API_SECRET: ${{ secrets.BINANCE_TESTNET_FUTURES_API_SECRET }}
       TITAN_TESTNET_SYMBOL: ${{ github.event.inputs.symbol || 'BTCUSDT' }}
       TITAN_LIVE_TRADING_ENABLED: "false"
       BINANCE_TESTNET_MARKET: "spot"
@@ -101,6 +103,8 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
           BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+          BINANCE_TESTNET_FUTURES_API_KEY: ${{ secrets.BINANCE_TESTNET_FUTURES_API_KEY }}
+          BINANCE_TESTNET_FUTURES_API_SECRET: ${{ secrets.BINANCE_TESTNET_FUTURES_API_SECRET }}
         run: |
           set -euo pipefail
           test -n "${VPS_HOST}"
@@ -113,7 +117,7 @@ jobs:
           ROOT="${{ steps.source.outputs.root }}"
           SMOKE="$GITHUB_WORKSPACE/extracted_github/TITAN-AI-SUPER-main/TITAN_EXTRACTED/titan-ai-premium-fix-pre-external-test-hardening-2026-11-11/.github/scripts/titan_testnet_readonly_smoke.py"
           tar -C "$ROOT" -czf "${RUNNER_TEMP}/backend.tar.gz" .
-          printf 'BINANCE_TESTNET_API_KEY=%s\nBINANCE_TESTNET_API_SECRET=%s\nTITAN_TESTNET_SYMBOL=%s\n' "${BINANCE_TESTNET_API_KEY}" "${BINANCE_TESTNET_API_SECRET}" "${TITAN_TESTNET_SYMBOL}" > "${RUNNER_TEMP}/binance-testnet.env"
+          printf 'BINANCE_TESTNET_API_KEY=%s\nBINANCE_TESTNET_API_SECRET=%s\nBINANCE_TESTNET_FUTURES_API_KEY=%s\nBINANCE_TESTNET_FUTURES_API_SECRET=%s\nTITAN_TESTNET_SYMBOL=%s\n' "${BINANCE_TESTNET_API_KEY}" "${BINANCE_TESTNET_API_SECRET}" "${BINANCE_TESTNET_FUTURES_API_KEY}" "${BINANCE_TESTNET_FUTURES_API_SECRET}" "${TITAN_TESTNET_SYMBOL}" > "${RUNNER_TEMP}/binance-testnet.env"
           chmod 600 "${RUNNER_TEMP}/binance-testnet.env"
           "${SSH[@]}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${REMOTE_DIR}'"
           "${SCP[@]}" "${RUNNER_TEMP}/backend.tar.gz" "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/backend.tar.gz"

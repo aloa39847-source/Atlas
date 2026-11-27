@@ -278,9 +278,20 @@ def _close_position(db, adapter, position: PositionRecord, price: float, target:
     # The immediate close path has already applied this cumulative fill.
     # Persist the watermark so a later fee-only reconciliation cannot apply it twice.
     close_meta = dict(order.metadata_json or {})
-    close_meta["applied_filled_quantity"] = max(
-        float(close_meta.get("applied_filled_quantity", 0) or 0), filled,
-    )
+    applied_quantity = max(float(close_meta.get("applied_filled_quantity", 0) or 0), filled)
+    close_meta["applied_filled_quantity"] = applied_quantity
+    # Use the exchange's cumulative quote total when it was returned. If only
+    # average price was available, mark the derived value as an estimate so a
+    # later authoritative snapshot can correct P&L without applying quantity twice.
+    raw_cumulative_quote = close_meta.get("exchange_cumulative_quote")
+    try:
+        applied_quote = float(raw_cumulative_quote) if raw_cumulative_quote is not None else actual_exit * filled
+    except (TypeError, ValueError, OverflowError):
+        raise RuntimeError("close_fill_quote_watermark_invalid")
+    if not math.isfinite(applied_quote) or applied_quote <= 0:
+        raise RuntimeError("close_fill_quote_watermark_invalid")
+    close_meta["applied_filled_quote"] = applied_quote
+    close_meta["applied_filled_quote_estimated"] = raw_cumulative_quote is None
     order.metadata_json = close_meta
     db.add(order)
     position.mark_price = actual_exit
@@ -488,8 +499,8 @@ def _open_signal(
         _flag_stop(db, "partial_market_order_fill_manual_reconciliation_required", emergency=True)
 
 
-def _sync_pending_orders(db, adapter, target: str, market: str) -> None:
-    """Poll every durable pending order and materialize exchange fills locally."""
+def _sync_pending_orders(db, adapter, target: str, market: str) -> dict[str, Any]:
+    """Reconcile durable Binance order states and materialize cumulative fills exactly once."""
     utc_midnight = _now().replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
     pending = db.execute(select(OrderRecord).where(
         OrderRecord.environment_mode == target,
@@ -500,20 +511,53 @@ def _sync_pending_orders(db, adapter, target: str, market: str) -> None:
             and_(OrderRecord.status == "filled", OrderRecord.updated_at >= utc_midnight),
         ),
     )).scalars().all()
+    summary = {
+        "ok": True, "orders_checked": 0, "orders_status_updated": 0,
+        "orders_with_fills": 0, "positions_updated": 0,
+        "fees_pending": 0, "orders_resolved": 0,
+    }
+
+    def fail_closed(order: OrderRecord, reason: str, stop_reason: str) -> None:
+        order.status = "unknown"
+        order.reason = reason
+        db.add(order)
+        _flag_stop(db, stop_reason, emergency=True)
+        raise RuntimeError(stop_reason)
+
     for order in pending:
         existing_meta = dict(order.metadata_json or {})
         if order.status == "filled" and existing_meta.get("fee_accounting_status") == "complete":
             continue
+        summary["orders_checked"] += 1
+        if not order.client_order_id and not order.exchange_order_id:
+            fail_closed(order, "Order has no exchange lookup identifier.", "binance_pending_order_identifier_missing")
         response = adapter.get_order(
-            order.symbol, client_order_id=order.client_order_id,
+            order.symbol,
+            client_order_id=order.client_order_id,
+            order_id=order.exchange_order_id,
         )
         if not isinstance(response, dict) or response.get("error"):
-            order.status = "unknown"
-            order.reason = "Order status lookup failed; outcome requires manual reconciliation."
-            db.add(order)
-            _flag_stop(db, "binance_pending_order_status_unavailable", emergency=True)
-            raise RuntimeError("binance_pending_order_status_unavailable")
-        raw_status = str(response.get("status") or "").lower()
+            fail_closed(order, "Order status lookup failed; outcome requires manual reconciliation.",
+                        "binance_pending_order_status_unavailable")
+
+        expected_symbol = str(order.symbol or "").replace("/", "").upper()
+        response_symbol = str(response.get("symbol") or "").replace("/", "").upper()
+        expected_client_id = str(order.client_order_id or "")
+        response_client_id = str(response.get("clientOrderId") or "")
+        expected_exchange_id = str(order.exchange_order_id or "")
+        response_exchange_id = str(response.get("orderId") or "")
+        identity_matches = bool(expected_symbol and response_symbol == expected_symbol)
+        if expected_client_id:
+            identity_matches = identity_matches and bool(response_client_id) and response_client_id == expected_client_id
+        elif expected_exchange_id:
+            identity_matches = identity_matches and bool(response_exchange_id) and response_exchange_id == expected_exchange_id
+        if expected_exchange_id and response_exchange_id and response_exchange_id != expected_exchange_id:
+            identity_matches = False
+        if not identity_matches:
+            fail_closed(order, "Binance order lookup identity did not match the durable local order.",
+                        "binance_pending_order_identity_mismatch")
+
+        raw_status = str(response.get("status") or "").strip().lower()
         status_map = {
             "new": "new", "partially_filled": "partially_filled",
             "filled": "filled", "canceled": "cancelled",
@@ -524,27 +568,43 @@ def _sync_pending_orders(db, adapter, target: str, market: str) -> None:
         try:
             executed = float(response.get("executedQty", 0) or 0)
             average = float(response.get("avgPrice", 0) or 0)
-            if average <= 0 and executed > 0:
-                quote_total = float(response.get("cummulativeQuoteQty", 0) or 0)
-                if quote_total > 0:
-                    average = quote_total / executed
+            raw_quote = response.get("cummulativeQuoteQty")
+            if raw_quote in (None, ""):
+                raw_quote = response.get("cumQuote")
+            cumulative_quote = float(raw_quote) if raw_quote not in (None, "") else None
+            if average <= 0 and executed > 0 and cumulative_quote is not None and cumulative_quote > 0:
+                # Spot GET /api/v3/order provides cummulativeQuoteQty but does
+                # not guarantee an avgPrice field. Derive the weighted average.
+                average = cumulative_quote / executed
+            if cumulative_quote is None and executed > 0 and average > 0:
+                cumulative_quote = executed * average
         except (TypeError, ValueError, OverflowError):
             status = None
             executed = average = float("nan")
+            cumulative_quote = float("nan")
+        previous_filled = float(order.filled_quantity or 0)
         if (status is None or not math.isfinite(executed) or executed < 0
                 or not math.isfinite(average) or average < 0
-                or executed > float(order.quantity) + 1e-8):
-            order.status = "unknown"
-            order.reason = "Invalid or unknown Binance order status/fill data."
-            db.add(order)
-            _flag_stop(db, "binance_pending_order_status_invalid", emergency=True)
-            raise RuntimeError("binance_pending_order_status_invalid")
+                or executed > float(order.quantity) + 1e-8
+                or executed + 1e-8 < previous_filled
+                or (executed > 0 and (
+                    average <= 0 or cumulative_quote is None
+                    or not math.isfinite(cumulative_quote) or cumulative_quote <= 0
+                ))):
+            fail_closed(order, "Invalid, regressive or unknown Binance order status/fill data.",
+                        "binance_pending_order_status_invalid")
+
         order.status = status
         order.filled_quantity = executed
         order.avg_fill_price = average or order.avg_fill_price
-        order.exchange_order_id = str(response.get("orderId")) if response.get("orderId") is not None else order.exchange_order_id
+        order.exchange_order_id = response_exchange_id or order.exchange_order_id
+        summary["orders_status_updated"] += 1
+        if executed > 0:
+            summary["orders_with_fills"] += 1
+
         meta = dict(order.metadata_json or {})
-        if executed > 0 and hasattr(adapter, "get_order_fee_quote") and (status != "filled" or meta.get("fee_accounting_status") != "complete"):
+        if (executed > 0 and hasattr(adapter, "get_order_fee_quote")
+                and (status != "filled" or meta.get("fee_accounting_status") != "complete")):
             fee_accounting = adapter.get_order_fee_quote(
                 order.symbol, order.exchange_order_id, fills=response.get("fills"),
             )
@@ -563,9 +623,13 @@ def _sync_pending_orders(db, adapter, target: str, market: str) -> None:
                     meta["fee_accounting_error"] = "invalid_fee_accounting_result"
             else:
                 meta["fee_accounting_status"] = "pending"
-                meta["fee_accounting_error"] = str((fee_accounting or {}).get("error") or "fee_history_unavailable")[:160]
+                meta["fee_accounting_error"] = str(
+                    (fee_accounting or {}).get("error") or "fee_history_unavailable"
+                )[:160]
             order.metadata_json = meta
-        db.add(order)
+        if meta.get("fee_accounting_status") == "pending":
+            summary["fees_pending"] += 1
+
         intent = meta.get("intent")
         if executed > 0 and intent == "open":
             positions = db.execute(select(PositionRecord).where(
@@ -582,7 +646,8 @@ def _sync_pending_orders(db, adapter, target: str, market: str) -> None:
             side = "long_spot" if market == "spot" else ("long" if order.side == "buy" else "short")
             avg = float(order.avg_fill_price or meta.get("reference_price") or order.price or 0)
             if avg <= 0 or not math.isfinite(avg):
-                raise RuntimeError("pending_entry_average_price_invalid")
+                fail_closed(order, "Pending entry has an invalid average fill price.",
+                            "pending_entry_average_price_invalid")
             if position is None:
                 position = PositionRecord(
                     environment_mode=target, market_type=market, symbol=order.symbol,
@@ -605,26 +670,62 @@ def _sync_pending_orders(db, adapter, target: str, market: str) -> None:
                 position.entry_avg_price = avg
                 position.mark_price = avg
                 db.add(position)
+            summary["positions_updated"] += 1
         elif executed > 0 and intent == "close":
             position_id = meta.get("position_id")
             position = db.get(PositionRecord, int(position_id)) if position_id is not None else None
             if position is None:
-                raise RuntimeError("pending_close_position_missing")
+                fail_closed(order, "Pending close references a missing local position.",
+                            "pending_close_position_missing")
             applied = float(meta.get("applied_filled_quantity", 0) or 0)
-            delta = max(0.0, executed - applied)
-            if delta > 0:
-                exit_price = float(order.avg_fill_price or 0)
-                entry_price = float(position.entry_avg_price or 0)
-                if exit_price <= 0 or entry_price <= 0:
-                    raise RuntimeError("pending_close_fill_price_invalid")
-                pnl = ((exit_price - entry_price) if position.side in {"long", "long_spot"}
-                       else (entry_price - exit_price)) * delta
-                position.quantity = max(0.0, float(position.quantity) - delta)
+            if applied > 1e-12 and "applied_filled_quote" not in meta:
+                fail_closed(order, "Historical close fill has no cumulative quote watermark; automatic P&L replay is unsafe.",
+                            "pending_close_quote_watermark_missing")
+            try:
+                applied_quote = float(meta.get("applied_filled_quote", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                applied_quote = float("nan")
+            if (not math.isfinite(applied) or applied < 0 or applied > executed + 1e-8
+                    or not math.isfinite(applied_quote) or applied_quote < 0
+                    or applied > 1e-12 and applied_quote <= 0):
+                fail_closed(order, "Invalid cumulative close-fill watermark.",
+                            "pending_close_fill_watermark_invalid")
+            new_quote = float(cumulative_quote or 0)
+            delta_quantity = executed - applied
+            delta_quote = new_quote - applied_quote
+            entry_price = float(position.entry_avg_price or 0)
+            if not math.isfinite(entry_price) or entry_price <= 0:
+                fail_closed(order, "Pending close position has an invalid entry price.",
+                            "pending_close_fill_price_invalid")
+            if delta_quantity > 1e-12:
+                if (delta_quote <= 0 or not math.isfinite(delta_quote)
+                        or delta_quantity > float(position.quantity or 0) + 1e-8):
+                    fail_closed(order, "Incremental close fill is inconsistent with cumulative quote or position quantity.",
+                                "pending_close_incremental_fill_invalid")
+                incremental_exit_price = delta_quote / delta_quantity
+                if not math.isfinite(incremental_exit_price) or incremental_exit_price <= 0:
+                    fail_closed(order, "Incremental close fill price is invalid.",
+                                "pending_close_incremental_fill_price_invalid")
+                pnl = ((incremental_exit_price - entry_price)
+                       if position.side in {"long", "long_spot"}
+                       else (entry_price - incremental_exit_price)) * delta_quantity
+                position.quantity = max(0.0, float(position.quantity) - delta_quantity)
                 position.realized_pnl = float(position.realized_pnl or 0.0) + pnl
-                meta["applied_filled_quantity"] = executed
-                order.metadata_json = meta
-                db.add(position)
-                db.add(order)
+                summary["positions_updated"] += 1
+            elif abs(delta_quote) > max(1e-8, abs(applied_quote) * 1e-9):
+                # Cumulative quantity is unchanged but an authoritative quote
+                # total differs from an earlier average-price estimate. Correct
+                # only realized P&L; never change position quantity again.
+                correction = delta_quote if position.side in {"long", "long_spot"} else -delta_quote
+                position.realized_pnl = float(position.realized_pnl or 0.0) + correction
+                summary["positions_updated"] += 1
+            meta["applied_filled_quantity"] = executed
+            meta["applied_filled_quote"] = new_quote
+            meta["applied_filled_quote_estimated"] = False
+            order.metadata_json = meta
+            db.add(position)
+            db.add(order)
+        db.add(order)
         db.commit()
         if status == "partially_filled" or (status in {"cancelled", "expired"} and executed > 0):
             _flag_stop(db, "partial_exchange_fill_manual_reconciliation_required", emergency=True)
@@ -637,6 +738,9 @@ def _sync_pending_orders(db, adapter, target: str, market: str) -> None:
                 position.status = "closed"
                 db.add(position)
                 db.commit()
+        if status in {"filled", "cancelled", "expired", "rejected"}:
+            summary["orders_resolved"] += 1
+    return summary
 
 
 def _exposure_snapshot(db, adapter, target: str, market: str, items: dict[str, dict]) -> tuple[float, int]:

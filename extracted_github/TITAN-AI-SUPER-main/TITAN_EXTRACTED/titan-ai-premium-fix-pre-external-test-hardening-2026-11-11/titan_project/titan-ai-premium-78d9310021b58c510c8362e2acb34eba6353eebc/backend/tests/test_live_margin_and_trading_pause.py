@@ -453,10 +453,13 @@ def test_partial_fill_fee_accounting_refreshes_until_order_is_fully_filled(tmp_p
             fee_total = 0.75
             calls = 0
 
-            def get_order(self, symbol, *, client_order_id=None):
+            def get_order(self, symbol, *, client_order_id=None, order_id=None):
                 return {
+                    "symbol": "BTCUSDT",
+                    "clientOrderId": client_order_id,
                     "status": "PARTIALLY_FILLED", "executedQty": "0.75",
-                    "avgPrice": "100", "orderId": "123",
+                    "avgPrice": "100", "cummulativeQuoteQty": "75",
+                    "orderId": "123",
                 }
 
             def get_order_fee_quote(self, symbol, order_id, *, fills=None):

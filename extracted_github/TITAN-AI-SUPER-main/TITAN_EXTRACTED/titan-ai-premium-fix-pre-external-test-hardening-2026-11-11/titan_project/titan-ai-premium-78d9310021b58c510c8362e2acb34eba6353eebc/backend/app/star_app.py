@@ -2772,10 +2772,16 @@ async def master_stop(request):
             close_positions=close_positions,
         )
         from app.services.demo_worker_supervisor import demo_worker_supervisor
-        stopped = demo_worker_supervisor.stop()
+        stopped = demo_worker_supervisor.stop(timeout=30.0)
         if not stopped.get("ok"):
+            # The persisted stop flag blocks new entries, but a timed-out thread
+            # may still be inside an exchange request. Latch the independent
+            # emergency flag until the worker is confirmed stopped and state is
+            # reconciled.
+            emergency_state = core_service.set_state(db, emergency_stop=True)
             return J({"ok": False, "error": "demo_worker_stop_failed",
-                      "worker": stopped, "state": core_service.get_state(db)}, 503)
+                      "emergency_stop_latched": True,
+                      "worker": stopped, "state": emergency_state}, 503)
         return J({**result, "worker": stopped})
     except Exception as e:
         db.rollback()
@@ -3089,9 +3095,17 @@ async def binance_execution_preflight(request):
             return err
         from app.services.binance_execution import binance_execution_service
         result = binance_execution_service.preflight(db, live_worker_ready=False)
-        result["worker_available"] = False
+        from app.services.demo_worker_supervisor import demo_worker_supervisor
+        worker_status = demo_worker_supervisor.status()
+        result["worker_available"] = True
+        result["worker_running"] = bool(worker_status.get("running"))
+        result["worker_status"] = worker_status
         result["orders_submitted"] = False
-        result["note"] = "Read-only readiness inspection. No order is submitted. Worker readiness remains false until the supervised execution loop and protection/reconciliation lifecycle are connected."
+        result["note"] = (
+            "Read-only readiness inspection; no order is submitted. When Testnet preflight is ready, "
+            "the separate dashboard Start action starts the supervised worker, which repeats account, "
+            "risk, order and reconciliation checks before any submission."
+        )
         return J(result, 200 if result.get("ok") else 409)
     except Exception as exc:
         return J({"ok": False, "error": "binance_execution_preflight_failed", "detail": str(exc)[:240]}, 503)
@@ -3229,6 +3243,7 @@ async def binance_testnet_account(request):
 
 
 async def binance_testnet_reconcile(request):
+    """Synchronize individual durable order states while the Testnet worker is stopped."""
     auth_error = _binance_auth_error(request)
     if auth_error:
         return auth_error
@@ -3237,6 +3252,45 @@ async def binance_testnet_reconcile(request):
         market = str(request.query_params.get("market") or "spot").strip().lower()
         if market not in {"spot", "futures"}:
             return J({"ok": False, "error": "unsupported_testnet_market"}, 400)
+        selected = core_service.get_state(db)
+        if str(selected.get("account_target") or "").lower() != "testnet":
+            return J({"ok": False, "error": "testnet_account_not_selected",
+                      "orders_submitted": False}, 409)
+        if str(selected.get("market_type") or "").lower() != market:
+            return J({"ok": False, "error": "testnet_market_selection_mismatch",
+                      "selected_market": selected.get("market_type"),
+                      "requested_market": market, "orders_submitted": False}, 409)
+
+        from app.services.demo_worker_supervisor import demo_worker_supervisor
+        worker = demo_worker_supervisor.status()
+        active_states = {"starting", "running", "analyzing", "executing", "waiting_data"}
+        if worker.get("running") is True or str(selected.get("bot_run_state") or "stopped").lower() in active_states:
+            return J({
+                "ok": False, "error": "stop_testnet_worker_before_manual_reconciliation",
+                "worker": worker, "bot_run_state": selected.get("bot_run_state"),
+                "orders_submitted": False,
+            }, 409)
+
+        adapter = _get_binance_adapter(market)
+        from app.services.binance_trading_worker import _sync_pending_orders
+        try:
+            order_sync = _sync_pending_orders(db, adapter, "testnet", market)
+        except Exception as sync_error:
+            db.rollback()
+            latest = core_service.get_state(db)
+            if latest.get("emergency_stop") is not True:
+                core_service.set_state(db, emergency_stop=True)
+                latest = core_service.get_state(db)
+            return J({
+                "ok": False,
+                "error": "testnet_order_status_sync_requires_manual_review",
+                "detail": str(sync_error)[:240],
+                "order_sync": {"ok": False},
+                "manual_review_required": True,
+                "emergency_stop_active": bool(latest.get("emergency_stop")),
+                "orders_submitted": False,
+            }, 409)
+
         local_rows = db.execute(select(OrderRecord).where(
             OrderRecord.environment_mode == "testnet",
             OrderRecord.market_type == market,
@@ -3248,11 +3302,40 @@ async def binance_testnet_reconcile(request):
             "orderId": row.exchange_order_id,
             "clientOrderId": row.client_order_id,
         } for row in local_rows]
-        adapter = _get_binance_adapter(market)
-        return J(adapter.reconcile(local_open_orders=local_open_orders))
+        open_order_result = adapter.reconcile(local_open_orders=local_open_orders)
+        if not isinstance(open_order_result, dict) or open_order_result.get("ok") is not True:
+            latest = core_service.get_state(db)
+            if latest.get("emergency_stop") is not True:
+                core_service.set_state(db, emergency_stop=True)
+                latest = core_service.get_state(db)
+            return J({
+                "ok": False,
+                "error": "testnet_open_order_reconciliation_mismatch",
+                "order_sync": order_sync,
+                "open_order_reconciliation": open_order_result,
+                "manual_review_required": True,
+                "emergency_stop_active": bool(latest.get("emergency_stop")),
+                "orders_submitted": False,
+            }, 409)
+
+        final_state = core_service.get_state(db)
+        return J({
+            "ok": True,
+            "market": market,
+            "order_sync": order_sync,
+            "open_order_reconciliation": open_order_result,
+            "manual_review_required": False,
+            "emergency_stop_active": bool(final_state.get("emergency_stop")),
+            "note": (
+                "Order states, fills, positions and fees were synchronized read-only. "
+                "This action does not clear Emergency Stop or start the worker; use the separate verified reset flow."
+            ),
+            "orders_submitted": False,
+        })
     except Exception as e:
         db.rollback()
-        return J({"ok": False, "error": str(e)}, 400)
+        return J({"ok": False, "error": "testnet_reconciliation_failed",
+                  "detail": str(e)[:240], "orders_submitted": False}, 409)
     finally:
         db.close()
 
@@ -3337,16 +3420,59 @@ async def binance_testnet_save(request):
     except Exception as e:
         return J({"ok": False, "saved": False, "error": str(e)}, 400)
 
+def _stop_worker_before_credential_deletion(db, target: str, market: str | None, reason: str) -> dict[str, Any]:
+    """Stop the owning account worker before removing credentials it may still use."""
+    from app.services.demo_worker_supervisor import demo_worker_supervisor
+
+    current = core_service.get_state(db)
+    worker = demo_worker_supervisor.status()
+    active_states = {"starting", "running", "analyzing", "executing", "waiting_data"}
+    state_matches = (
+        str(current.get("account_target") or "demo").lower() == target
+        and (market is None or str(current.get("market_type") or "spot").lower() == market)
+        and str(current.get("bot_run_state") or "stopped").lower() in active_states
+    )
+    worker_matches = (
+        worker.get("running") is True
+        and str(worker.get("account_target") or "").lower() == target
+        and (market is None or str(worker.get("market") or "").lower() == market)
+    )
+    if not state_matches and not worker_matches:
+        return {"ok": True, "stopped": False, "note": "No matching account worker was active."}
+
+    stopped = demo_worker_supervisor.stop(timeout=30.0)
+    if not stopped.get("ok"):
+        emergency_state = core_service.set_state(db, emergency_stop=True)
+        return {
+            "ok": False, "stopped": False, "worker": stopped,
+            "state": emergency_state,
+            "error": "account_worker_did_not_stop_credentials_retained",
+        }
+    core_service.stop_bot(db, reason=reason)
+    return {"ok": True, "stopped": True, "worker": stopped}
+
+
 async def binance_testnet_delete(request):
     auth_error = _binance_auth_error(request)
     if auth_error:
         return auth_error
+    market = request.query_params.get("market")
+    if market is not None and market not in {"spot", "futures"}:
+        return J({"ok": False, "error": "market_must_be_spot_or_futures"}, 400)
+    db = db_sess()
     try:
-        market = request.query_params.get("market")
-        res = delete_testnet_credentials(market if market in {"spot", "futures"} else None)
-        return J(res)
+        worker_stop = _stop_worker_before_credential_deletion(
+            db, "testnet", market, "delete_testnet_credentials",
+        )
+        if not worker_stop.get("ok"):
+            return J({**worker_stop, "deleted": False}, 503)
+        result = delete_testnet_credentials(market)
+        return J({**result, "worker": worker_stop})
     except Exception as e:
-        return J({"ok": False, "error": str(e)}, 400)
+        db.rollback()
+        return J({"ok": False, "error": str(e)[:240]}, 400)
+    finally:
+        db.close()
 
 async def binance_testnet_creds_status(request):
     auth_error = _binance_auth_error(request)
@@ -3470,7 +3596,20 @@ async def binance_live_delete(request):
     market = request.query_params.get("market")
     if market not in {"spot", "futures"}:
         return J({"ok": False, "error": "market_must_be_spot_or_futures"}, 400)
-    return J(delete_live_credentials(market))
+    db = db_sess()
+    try:
+        worker_stop = _stop_worker_before_credential_deletion(
+            db, "live", market, "delete_live_credentials",
+        )
+        if not worker_stop.get("ok"):
+            return J({**worker_stop, "deleted": False}, 503)
+        result = delete_live_credentials(market)
+        return J({**result, "worker": worker_stop})
+    except Exception as exc:
+        db.rollback()
+        return J({"ok": False, "error": str(exc)[:240]}, 400)
+    finally:
+        db.close()
 
 
 async def engines_list_detailed(request: Request):

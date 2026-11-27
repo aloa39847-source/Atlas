@@ -363,6 +363,79 @@ export default function TerminalDashboard() {
   useEffect(()=>{ if(tab==='ai') refreshAiProviders() },[tab,refreshAiProviders])
   useEffect(()=>{ if(tab==='settings') refreshAccountHealth() },[tab,refreshAccountHealth])
 
+  async function validateTestnetTradePermission() {
+    if(selectedTarget!=='testnet') {
+      setMessage('اختر Binance Testnet أولاً.')
+      return
+    }
+    if(!accountHealth?.testnetCreds?.configured) {
+      setMessage('احفظ مفاتيح Binance Testnet وتحقق من اتصال الحساب أولاً.')
+      return
+    }
+    setBusy(true);setMessage('')
+    try {
+      const result=await api.binanceTestnetValidateTradePermission(market,symbol)
+      await refreshAccountHealth()
+      if(result?.verified===true && result?.order_submitted===false && result?.matching_engine_reached===false) {
+        setMessage('تم التحقق من صلاحية API TRADE على Testnet دون إرسال أمر إلى محرك المطابقة. العامل ما زال متوقفاً؛ اضغط بدء التداول صراحةً عند الاستعداد.')
+      } else {
+        setMessage('لم ينجح التحقق من صلاحية API TRADE: '+(result?.error||'نتيجة التحقق غير مكتملة'))
+      }
+    } catch(e) {
+      await refreshAccountHealth()
+      setMessage('فشل التحقق من صلاحية API TRADE: '+e.message)
+    } finally { setBusy(false) }
+  }
+
+  async function resetEmergencyStop() {
+    if(status?.state?.emergency_stop!==true) {
+      setMessage('لا يوجد إيقاف طارئ مفعّل لإعادة ضبطه.')
+      return
+    }
+    if(!window.confirm('سيجري TITAN فحوص الاتصال والمصالحة والبيانات الحديثة. لن يبدأ أي عامل تداول بعد إعادة الضبط. هل تتابع؟')) return
+    setBusy(true);setMessage('')
+    try {
+      const result=await api.emergencyReset()
+      await refreshSystem()
+      await refreshAccountHealth()
+      if(result?.ok===true && result?.state?.emergency_stop===false) {
+        setMessage('اجتازت إعادة ضبط الإيقاف الطارئ فحوص الأمان. العامل ما زال متوقفاً؛ بدء التداول يتطلب ضغط زر البدء بشكل منفصل.')
+      } else {
+        setMessage('لم تتم إعادة ضبط الإيقاف الطارئ: '+(result?.error||'الفحوص لم تكتمل'))
+      }
+    } catch(e) {
+      await refreshSystem()
+      setMessage('رفض النظام إعادة ضبط الإيقاف الطارئ: '+e.message)
+    } finally { setBusy(false) }
+  }
+
+  async function reconcileTestnetOrders() {
+    if(selectedTarget!=='testnet') {
+      setMessage('اختر Binance Testnet أولاً.')
+      return
+    }
+    if(!accountHealth?.testnetCreds?.configured) {
+      setMessage('احفظ مفاتيح Testnet للسوق المحدد أولاً.')
+      return
+    }
+    setBusy(true);setMessage('')
+    try {
+      const result=await api.binanceTestnetReconcile(market)
+      await refreshSystem()
+      await refreshAccountHealth()
+      if(result?.ok===true && result?.orders_submitted===false) {
+        const checked=result?.order_sync?.orders_checked??0
+        const resolved=result?.order_sync?.orders_resolved??0
+        setMessage(`اكتملت المصالحة للقراءة فقط: فُحص ${checked} أمر، وحُسمت حالة ${resolved}. لم يُرسل أي أمر. يظل Emergency Stop كما هو؛ استخدم إعادة الضبط المنفصلة بعد مراجعة الحالة.`)
+      } else {
+        setMessage('المصالحة تتطلب مراجعة يدوية، وتم إبقاء الإيقاف الطارئ عند الحاجة: '+(result?.error||'نتيجة غير مكتملة'))
+      }
+    } catch(e) {
+      await refreshSystem()
+      setMessage('فشلت مصالحة أوامر Testnet: '+e.message)
+    } finally { setBusy(false) }
+  }
+
   async function saveTradingSelection() {
     if(!['demo','testnet','live'].includes(selectedTarget)) {
       setMessage('اختر Demo أو Binance Testnet أو Binance Live.')
@@ -371,24 +444,14 @@ export default function TerminalDashboard() {
     setBusy(true);setMessage('')
     try {
       await api.setState({account_target:selectedTarget, market_type:market})
-      let testnetStarted = false
-      let testnetBlockedReason = ''
-      if(selectedTarget==='testnet') {
-        const creds = await api.binanceTestnetCredsStatus(market)
-        if(creds?.configured) {
-          const preflight = await api.binanceExecutionPreflight()
-          if(preflight?.ready) {
-            await api.masterStart({account_target:'testnet'})
-            testnetStarted = true
-          } else {
-            testnetBlockedReason = preflight?.status?.execution_readiness_check || preflight?.error || 'فحوص الجاهزية لم تكتمل'
-          }
-        }
-      }
       await refreshSystem()
       await refreshAccountHealth()
       setLiveApproval(false)
-      setMessage(selectedTarget==='demo'?'تم اختيار Demo الداخلي.':selectedTarget==='testnet'?(testnetStarted?'تم تشغيل تداول Binance Testnet تلقائياً.':testnetBlockedReason?'تم اختيار Binance Testnet، لكن التداول بقي متوقفاً: '+testnetBlockedReason:'تم اختيار Binance Testnet؛ اربط مفاتيح التداول أولاً.'):'تم اختيار Binance Live للاتصال والقراءة فقط. لن يبدأ التداول الحقيقي حتى تمنح الموافقة الصريحة وتضغط بدء التداول.')
+      setMessage(selectedTarget==='demo'
+        ? 'تم اختيار Demo الداخلي.'
+        : selectedTarget==='testnet'
+          ? 'تم اختيار Binance Testnet. لم يبدأ العامل تلقائياً؛ تحقق من صلاحية API TRADE ثم اضغط زر بدء التداول بشكل منفصل.'
+          : 'تم اختيار Binance Live للاتصال والقراءة فقط. لن يبدأ التداول الحقيقي، وميزة Live معطلة في هذا الإصدار.')
     } catch(e) { setMessage('تعذر حفظ إعداد الحساب: '+e.message) }
     finally { setBusy(false) }
   }
@@ -448,6 +511,10 @@ export default function TerminalDashboard() {
   }
 
   async function master(action) {
+    if(action==='start' && selectedTarget==='testnet' && accountHealth?.preflight?.ready!==true) {
+      setMessage('لن يبدأ عامل Testnet قبل نجاح الاتصال والتحقق المستقل من صلاحية API TRADE عبر فحص order/test.')
+      return
+    }
     if(action==='start' && selectedTarget==='live') {
       if(!liveApproval) { setMessage('فعّل خانة «مسموح ببدء التداول الحقيقي» أولاً.'); return }
       if(!window.confirm('أنت على وشك السماح لـ TITAN بإرسال أوامر تداول حقيقية على Binance '+market.toUpperCase()+'. تأكد من الحساب والمخاطر. هل تمنح الموافقة الآن؟')) return
@@ -624,25 +691,29 @@ export default function TerminalDashboard() {
     </Panel>
     </div>}
     {tab==='strategies'&&<div className="tt-feature-grid"><BacktestPanel/><MLResearchPanel/><FuturesOrderbookHistoryPanel/></div>}
-    {tab==='risk'&&<div className="tt-feature-grid"><Panel title="حالة الحماية وإدارة المخاطر"><pre>{JSON.stringify({state:status?.state,integrations:status?.integrations},null,2)}</pre><button className="tt-primary" onClick={()=>master('start')} disabled={busy || (selectedTarget==='testnet' && accountHealth?.preflight?.ready===false) || (selectedTarget==='live' && (!liveApproval || status?.integrations?.binance?.server_live_enabled!==true)) || (['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) && !(selectedTarget==='live' && status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button><button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button><button className="tt-danger" onClick={()=>master('emergency')} disabled={busy}>إيقاف الطوارئ</button></Panel><Panel title="التشخيص الذاتي"><button className="tt-primary" onClick={runDiagnosis} disabled={busy}>تشغيل التشخيص</button>{diagnosis&&<pre>{JSON.stringify(diagnosis,null,2)}</pre>}</Panel><RiskSimulationPanel/></div>}
+    {tab==='risk'&&<div className="tt-feature-grid"><Panel title="حالة الحماية وإدارة المخاطر"><pre>{JSON.stringify({state:status?.state,integrations:status?.integrations},null,2)}</pre><button className="tt-primary" onClick={()=>master('start')} disabled={busy || (selectedTarget==='testnet' && accountHealth?.preflight?.ready!==true) || (selectedTarget==='live' && (!liveApproval || status?.integrations?.binance?.server_live_enabled!==true)) || (['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state) && !(selectedTarget==='live' && status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button><button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button><button className="tt-danger" onClick={()=>master('emergency')} disabled={busy}>إيقاف الطوارئ</button></Panel><Panel title="التشخيص الذاتي"><button className="tt-primary" onClick={runDiagnosis} disabled={busy}>تشغيل التشخيص</button>{diagnosis&&<pre>{JSON.stringify(diagnosis,null,2)}</pre>}</Panel><RiskSimulationPanel/></div>}
     {tab==='portfolio'&&<div className="tt-feature-grid"><Panel title="المحفظة الداخلية"><h2>{balance===null?'—':fmt(balance)+' USDT'}</h2><button className="tt-secondary" onClick={refreshSystem}>تحديث</button><pre>{JSON.stringify(portfolio,null,2)}</pre></Panel><PerformancePanel/></div>}
     {tab==='reports'&&<div className="tt-feature-grid"><PerformancePanel/></div>}
     {tab==='settings'&&<div className="tt-feature-grid"><Panel title="حساب Binance والتداول">
       <label>الحساب المستهدف</label><select value={selectedTarget} onChange={e=>{setSelectedTarget(e.target.value);setLiveApproval(false)}} disabled={['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}><option value="demo">Demo داخلي (Shadow)</option><option value="testnet">Binance Demo / Testnet (تداول آلي تجريبي)</option><option value="live">Binance Live (البدء بموافقتك فقط)</option></select>
       <label>السوق</label><select value={market} onChange={e=>setMarket(e.target.value)} disabled={['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}><option value="spot">Spot</option><option value="futures">USD-M Futures</option></select>
       <div className="tt-ai-line"><span>حالة Testnet</span><b>{accountHealth?.testnet?.connected?(accountHealth?.testnet?.execution_ready?'متصل وجاهز':accountHealth?.testnet?.account_can_trade?'متصل للقراءة؛ صلاحية API TRADE غير متحققة':'متصل لكن التداول غير مسموح للحساب'):accountHealth?.testnet?.error||'غير متصل'}</b></div>
+      <div className="tt-ai-line"><span>إثبات صلاحية API TRADE</span><b>{accountHealth?.testnet?.api_key_trade_permission_verified===true?'تم التحقق · صلاحية مؤقتة 5 دقائق':'غير متحقق؛ لن يبدأ العامل'}</b></div>
       <div className="tt-ai-line"><span>حالة Live</span><b>{accountHealth?.live?.connected?'متصل للقراءة':accountHealth?.live?.error||'غير متصل'}</b></div>
       <div className="tt-ai-line"><span>تنفيذ Live</span><b>{accountHealth?.live?.execution_ready?'جاهز بعد الموافقة وفحوص الجاهزية':accountHealth?.live?.live_blocked?'ينتظر الموافقة وفحوص الجاهزية':'غير جاهز'}</b></div>
       <div className="tt-ai-line"><span>Preflight</span><b>{accountHealth?.preflight?.ready?'جاهز':accountHealth?.preflight?.status?.execution_readiness_check||accountHealth?.preflight?.error||'غير مفحوص'}</b></div>
       <div className="tt-ai-line"><span>مفاتيح Testnet {market}</span><b>{accountHealth?.testnetCreds?.configured?'محفوظة':'غير محفوظة'}</b></div>
       <button className="tt-secondary" onClick={saveTradingSelection} disabled={busy||['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>حفظ اختيار الحساب والسوق</button>
-      <button className="tt-secondary" onClick={refreshAccountHealth}>فحص الاتصال والحالة</button>
+      <button className="tt-secondary" onClick={refreshAccountHealth} disabled={busy}>فحص الاتصال والحالة</button>
+      <button className="tt-secondary" onClick={validateTestnetTradePermission} disabled={busy||selectedTarget!=='testnet'||!accountHealth?.testnetCreds?.configured}>تحقق من صلاحية API TRADE دون إرسال أمر</button>
+      <button className="tt-secondary" onClick={reconcileTestnetOrders} disabled={busy||selectedTarget!=='testnet'||!accountHealth?.testnetCreds?.configured||['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>مصالحة حالة أوامر Testnet (قراءة فقط)</button>
+      {status?.state?.emergency_stop===true&&<button className="tt-danger" onClick={resetEmergencyStop} disabled={busy||['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>إعادة ضبط الإيقاف الطارئ بعد التحقق</button>}
       <div className="tt-order-form"><b>مفاتيح Binance Testnet · {market}</b><input type="password" autoComplete="off" placeholder="API Key" value={testnetApiKey} onChange={e=>setTestnetApiKey(e.target.value)}/><input type="password" autoComplete="new-password" placeholder="API Secret" value={testnetApiSecret} onChange={e=>setTestnetApiSecret(e.target.value)}/><button className="tt-secondary" onClick={saveTestnetKeys} disabled={busy||!testnetApiKey||!testnetApiSecret}>حفظ مفاتيح Testnet</button></div>
       <div className="tt-order-form"><b>مفاتيح Binance Live · {market}</b><input type="password" autoComplete="off" placeholder="Live API Key (قراءة أولاً)" value={liveApiKey} onChange={e=>setLiveApiKey(e.target.value)}/><input type="password" autoComplete="new-password" placeholder="Live API Secret" value={liveApiSecret} onChange={e=>setLiveApiSecret(e.target.value)}/><button className="tt-secondary" onClick={saveLiveKeys} disabled={busy||!liveApiKey||!liveApiSecret}>تحقق وحفظ Live للقراءة فقط</button></div>
       <button className="tt-secondary" onClick={deleteLegacyLiveKeys} disabled={busy||!accountHealth?.liveCreds?.configured}>حذف مفاتيح Live لهذا السوق</button>
       {selectedTarget==='live'&&<label className="tt-consent-row"><input type="checkbox" checked={liveApproval} onChange={e=>setLiveApproval(e.target.checked)} disabled={busy||(['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)&&status?.state?.live_confirmed_by_user===true)}/> <b>مسموح ببدء التداول الحقيقي</b><small>{'ربط المفاتيح يتيح قراءة الحساب والتحليل فقط. لن تُرسل أي صفقة حقيقية حتى تفعّل هذا الخيار وتضغط «بدء التداول الحقيقي» وتؤكد الموافقة.'}</small></label>}
       <small className="tt-muted">Testnet يبقى للقراءة فقط حتى يتم التحقق المستقل من صلاحية API TRADE عبر فحص أمر تجريبي لا يرسله إلى محرك المطابقة. Live معطل افتراضياً ويبقى للقراءة فقط، ولا سحب أو تحويل. زر «إيقاف المحرك بالكامل» يلغي الموافقة ويوقف العامل، لكنه لا يغلق المراكز المفتوحة تلقائياً. زر «إيقاف التداول فقط» يوقف فتح صفقات جديدة مع استمرار إدارة المراكز. لا سحب أو تحويل؛ وتبقى حدود المخاطر والإيقاف الطارئ والمطابقة إلزامية.</small>
-      <button className="tt-primary" onClick={()=>master('start')} disabled={busy||(selectedTarget==='testnet'&&accountHealth?.preflight?.ready===false)||(selectedTarget==='live'&&(!liveApproval||status?.integrations?.binance?.server_live_enabled!==true))||(['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)&&!(selectedTarget==='live'&&status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button>
+      <button className="tt-primary" onClick={()=>master('start')} disabled={busy||(selectedTarget==='testnet'&&accountHealth?.preflight?.ready!==true)||(selectedTarget==='live'&&(!liveApproval||status?.integrations?.binance?.server_live_enabled!==true))||(['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)&&!(selectedTarget==='live'&&status?.state?.live_confirmed_by_user!==true))}> {selectedTarget==='live'?'بدء التداول الحقيقي':selectedTarget==='testnet'?'بدء تداول Binance Testnet':'تشغيل Demo/Shadow'}</button>
       <button className="tt-secondary" onClick={()=>master('stop')} disabled={busy}>إيقاف المحرك بالكامل</button>
     </Panel><Panel title="إعدادات TITAN"><div className="tt-ai-line"><span>البيئة</span><b>{status?.state?.environment_mode||'demo'}</b></div><div className="tt-ai-line"><span>السوق</span><b>{market}</b></div><div className="tt-ai-line"><span>المصادقة الثنائية</span><b>{auth.me?.two_factor_enabled?'مفعّلة':'غير مفعّلة'}</b></div>{auth.me?.authenticated&&!auth.me?.two_factor_enabled&&<button className="tt-secondary" disabled={busy} onClick={startTwoFactorSetup}>إعداد تطبيق المصادقة</button>}{twoFactorSetup&&<div className="tt-order-form"><p>أضف هذا المفتاح إلى تطبيق Authenticator:</p><code>{twoFactorSetup.secret}</code><p className="tt-muted">أو استعمل رابط الإعداد داخل تطبيق يدعم QR.</p><input value={twoFactorCode} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} placeholder="رمز من 6 أرقام" onChange={e=>setTwoFactorCode(e.target.value.replace(/\D/g,'').slice(0,6))}/><button className="tt-primary" disabled={busy||twoFactorCode.length!==6} onClick={confirmTwoFactorSetup}>تأكيد وتفعيل 2FA</button></div>}{auth.me?.two_factor_enabled&&<div className="tt-order-form"><input value={twoFactorCode} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} placeholder="رمز المصادقة الحالي" onChange={e=>setTwoFactorCode(e.target.value.replace(/\D/g,'').slice(0,6))}/><button className="tt-secondary" disabled={busy||twoFactorCode.length!==6} onClick={disableTwoFactor}>تعطيل 2FA بعد التحقق</button></div>}<button className="tt-secondary" onClick={refreshSystem}>تحديث الحالة</button><button className="tt-primary" onClick={()=>setTab('risk')}>فتح الحماية والتشخيص</button></Panel><TelegramPanel/></div>}
     <footer className="tt-footer"><b>TITAN SUPER AI PREMIUM</b><span>TRADE SMARTER · TRADE SAFER</span><small>بيانات السوق عامة للقراءة فقط · لا توجد صلاحيات إيداع أو سحب أو تحويل</small></footer>
