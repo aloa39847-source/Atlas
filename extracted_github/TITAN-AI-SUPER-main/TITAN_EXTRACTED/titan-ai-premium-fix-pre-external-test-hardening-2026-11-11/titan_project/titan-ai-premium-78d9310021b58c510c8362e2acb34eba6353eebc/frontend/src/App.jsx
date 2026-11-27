@@ -191,7 +191,7 @@ export default function App() {
   async function validateBinanceTradePermission() {
     setBusy(true); setBinanceMsg('')
     try {
-      const market = binanceOrderForm.market || binanceForm.market
+      const market = binanceForm.market || binanceOrderForm.market
       const r = await api.binanceTestnetValidateTradePermission(market, 'BTCUSDT')
       setBinanceMsg(r.ok
         ? 'تم إثبات صلاحية TRADE عبر order/test. لم يُرسل أي أمر إلى محرك المطابقة.'
