@@ -203,9 +203,8 @@ class TitanCoreService:
             if not getattr(state, "bot_run_state", None):
                 state.bot_run_state = "stopped"
 
-            # Execution capability is controlled by server configuration and
-            # the explicit Live Start action. Bootstrap must never revoke an
-            # already-running supervised worker or clear its user confirmation.
+            # Live execution is hard-disabled in this release. Bootstrap must never
+            # infer or grant real-money execution capability from persisted state.
             state.live_trading_enabled = bool(settings.live_trading_enabled)
             if (str(getattr(state, "account_target", "") or "").lower() != "live"
                     and str(getattr(state, "environment_mode", "") or "").lower() != "live"):
@@ -252,10 +251,10 @@ class TitanCoreService:
             "safety": {
                 "allow_demo_to_live_auto": settings.allow_demo_to_live_auto,
                 "allow_withdrawal_permissions": settings.allow_withdrawal_permissions,
-                "note": "A Binance Testnet account may be authenticated for read-only checks, but its worker remains stopped until API-key TRADE permission is independently validated and the full preflight passes. Live execution is disabled by default and remains read-only until a separate explicit approval and all server, eligibility, API-permission and risk checks pass. Withdrawal/transfer permissions are never supported.",
+                "note": "A Binance Testnet account may be authenticated for read-only checks, but its worker remains stopped until API-key TRADE permission is independently validated and the full preflight passes. Live credentials, if configured, are read-only; Live order execution is hard-disabled in this release and cannot be enabled by dashboard confirmation or environment variables. Withdrawal/transfer permissions are never supported.",
             },
             "master_control": {
-                "start_requires": ["account_target_selected", "connectivity_or_data_check", "compliance_check", "risk_limits", "no_duplicate_run", "explicit_live_user_confirmation_for_real_account"],
+                "start_requires": ["account_target_selected", "connectivity_or_data_check", "compliance_check", "risk_limits", "no_duplicate_run", "live_execution_hard_disabled_by_server"],
                 "stop_default": "stop_new_only",
                 "emergency_stop": "independent_flag_blocks_new_actions",
             },
@@ -459,8 +458,8 @@ class TitanCoreService:
                 "note": "Safety checks passed. Emergency stop cleared, but no worker was started."}
 
     def start_bot(self, db: Session, *, account_target: str | None = None, live_confirm: bool = False) -> dict[str, Any]:
-        # Starting Live is the explicit user authorization boundary. Merely
-        # saving Live credentials never starts the worker or places an order.
+        # Live order execution is hard-disabled in this release. The guard below
+        # remains defense in depth if persisted state or runtime settings are altered.
         if account_target is not None:
             target = str(account_target).strip().lower()
             if target not in {"demo", "testnet", "live"}:
