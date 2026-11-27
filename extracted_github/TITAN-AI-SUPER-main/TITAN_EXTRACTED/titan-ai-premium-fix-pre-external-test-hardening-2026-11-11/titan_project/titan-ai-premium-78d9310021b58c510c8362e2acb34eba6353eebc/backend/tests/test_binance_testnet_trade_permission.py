@@ -143,3 +143,32 @@ def test_api_endpoint_uses_selected_testnet_market_and_never_returns_secrets(mon
     assert payload["ok"] is True
     assert payload["order_submitted"] is False
     assert captured == ["futures"]
+
+
+def test_status_reports_ready_only_after_cached_order_test_validation(monkeypatch):
+    validator = _adapter("spot")
+    monkeypatch.setattr(validator, "_api_key", lambda: "cached-testnet-key")
+    monkeypatch.setattr(validator, "_api_secret", lambda: "cached-testnet-secret")
+    monkeypatch.setattr(validator, "status", lambda: {
+        "connected": True, "account_can_trade": True,
+    })
+    monkeypatch.setattr(validator, "_symbol_filters", lambda symbol: {
+        "marketStepSize": 0.001, "marketMinQty": 0.001, "marketMaxQty": 100,
+        "minNotional": 0,
+    })
+    monkeypatch.setattr(validator, "_market_price", lambda symbol: 60000.0)
+    monkeypatch.setattr(validator, "_request", lambda *args, **kwargs: {})
+    assert validator.validate_testnet_trade_permission("BTCUSDT")["ok"] is True
+
+    status_adapter = _adapter("spot")
+    monkeypatch.setattr(status_adapter, "_api_key", lambda: "cached-testnet-key")
+    monkeypatch.setattr(status_adapter, "_api_secret", lambda: "cached-testnet-secret")
+    monkeypatch.setattr(status_adapter, "_request", lambda method, path, **kwargs: {
+        "canTrade": True, "balances": [],
+    })
+    status = status_adapter.status()
+    assert status["connected"] is True
+    assert status["account_can_trade"] is True
+    assert status["api_key_trade_permission_verified"] is True
+    assert status["execution_ready"] is True
+    assert status["execution_readiness_check"] == "ok"
