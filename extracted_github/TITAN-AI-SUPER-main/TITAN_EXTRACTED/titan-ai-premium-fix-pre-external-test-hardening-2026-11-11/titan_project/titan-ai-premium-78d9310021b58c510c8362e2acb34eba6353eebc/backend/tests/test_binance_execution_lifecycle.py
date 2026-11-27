@@ -30,7 +30,13 @@ class FakeTestnetAdapter:
     def get_order(self, symbol, *, client_order_id=None, order_id=None):
         self.lookup_calls += 1
         self.lookup_client_order_ids.append(client_order_id)
-        return self.lookup_result
+        if not isinstance(self.lookup_result, dict):
+            return self.lookup_result
+        snapshot = dict(self.lookup_result)
+        snapshot.setdefault("symbol", symbol.replace("/", "").upper())
+        if client_order_id:
+            snapshot.setdefault("clientOrderId", client_order_id)
+        return snapshot
 
     def get_order_fee_quote(self, symbol, order_id, *, fills=None):
         self.fee_calls += 1
@@ -158,7 +164,6 @@ def test_timed_out_submission_is_recovered_by_read_only_client_order_id_lookup(t
         lookup_result={
             "symbol": "BTCUSDT",
             "orderId": 778899,
-            "clientOrderId": "titan-recovered-order",
             "status": "FILLED",
             "origQty": "0.1",
             "executedQty": "0.1",
@@ -212,7 +217,6 @@ def test_timed_out_submission_recovered_as_partial_fill_latches_emergency_stop(t
         lookup_result={
             "symbol": "BTCUSDT",
             "orderId": 998877,
-            "clientOrderId": "titan-partial-recovered",
             "status": "PARTIALLY_FILLED",
             "origQty": "0.1",
             "executedQty": "0.04",
