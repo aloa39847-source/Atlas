@@ -38,6 +38,13 @@ ALLOWED_BASES = TESTNET_BASES | LIVE_BASES
 _RATE_LIMIT_LOCK = threading.Lock()
 _RATE_LIMIT_UNTIL = 0.0
 
+# A successful Binance order/test response proves that this exact Testnet API
+# key has TRADE scope without submitting an order to the matching engine.
+# Keep the proof short-lived and scoped to the key fingerprint + market.
+_TESTNET_TRADE_PERMISSION_LOCK = threading.Lock()
+_TESTNET_TRADE_PERMISSION_CACHE: dict[tuple[str, str, str], float] = {}
+_TESTNET_TRADE_PERMISSION_TTL_SECONDS = 300
+
 
 def _rate_limit_remaining() -> float:
     with _RATE_LIMIT_LOCK:
@@ -284,15 +291,16 @@ class BinanceTestnetAdapter:
                 result["account_check"] = "ok" if account_payload_valid else "invalid_or_error_response"
                 if environment == "testnet" and result["connected"]:
                     # canTrade is an account-level flag, not proof that this
-                    # specific API key has TRADE scope. Spot Testnet exposes no
-                    # SAPI permission endpoint, so read-only checks cannot verify
-                    # key-level trading permission.
+                    # specific API key has TRADE scope. A successful /order/test
+                    # validation is cached briefly for this exact key + market.
                     result["account_can_trade"] = acct.get("canTrade") is True
-                    result["trade_permission"] = None
-                    result["api_key_trade_permission_verified"] = None
-                    result["execution_ready"] = False
+                    verified = self._testnet_trade_permission_is_cached()
+                    result["trade_permission"] = True if verified else None
+                    result["api_key_trade_permission_verified"] = verified if verified else None
+                    result["execution_ready"] = bool(result["account_can_trade"] and verified)
                     result["execution_readiness_check"] = (
-                        "api_key_trade_permission_requires_explicit_test_order_validation"
+                        "ok" if result["execution_ready"] else
+                        "api_key_trade_permission_requires_test_order_validation"
                         if result["account_can_trade"] else "binance_account_trading_disabled"
                     )
                     if not result["account_can_trade"]:
@@ -334,6 +342,103 @@ class BinanceTestnetAdapter:
             result["connected"] = False
             result["note"] = "Configure the selected Binance environment API keys. Secrets remain server-side."
         return result
+
+    def _testnet_trade_permission_cache_key(self) -> tuple[str, str, str]:
+        key = self._api_key() or ""
+        fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest() if key else ""
+        return (self.config.market, self._base_url(), fingerprint)
+
+    def _testnet_trade_permission_is_cached(self) -> bool:
+        if self.config.environment != "testnet" or not self._api_key():
+            return False
+        cache_key = self._testnet_trade_permission_cache_key()
+        now = time.monotonic()
+        with _TESTNET_TRADE_PERMISSION_LOCK:
+            expires_at = _TESTNET_TRADE_PERMISSION_CACHE.get(cache_key, 0.0)
+            if expires_at <= now:
+                _TESTNET_TRADE_PERMISSION_CACHE.pop(cache_key, None)
+                return False
+            return True
+
+    def validate_testnet_trade_permission(self, symbol: str = "BTCUSDT") -> dict[str, Any]:
+        """Verify Testnet TRADE scope with Binance's non-matching-engine order/test endpoint.
+
+        This sends a signed validation request to Binance, but the documented
+        endpoint validates order parameters without creating an exchange order.
+        """
+        if self.config.environment != "testnet":
+            return {"ok": False, "order_submitted": False, "error": "testnet_only_permission_validation"}
+        if self.config.market not in {"spot", "futures"}:
+            return {"ok": False, "order_submitted": False, "error": "unsupported_market"}
+        if not self._api_key() or not self._api_secret():
+            return {"ok": False, "order_submitted": False, "error": "testnet_credentials_missing"}
+        normalized_symbol = str(symbol or "").replace("/", "").strip().upper()
+        if not normalized_symbol or len(normalized_symbol) > 24:
+            return {"ok": False, "order_submitted": False, "error": "invalid_test_symbol"}
+        try:
+            account_status = self.status()
+            if not account_status.get("connected"):
+                return {"ok": False, "order_submitted": False, "error": "testnet_account_authentication_failed",
+                        "account_status": account_status}
+            if account_status.get("account_can_trade") is not True:
+                return {"ok": False, "order_submitted": False, "error": "binance_account_trading_disabled"}
+
+            filters = self._symbol_filters(normalized_symbol)
+            reference = self._market_price(normalized_symbol)
+            if not math.isfinite(reference) or reference <= 0:
+                raise RuntimeError("invalid_market_reference_price")
+            step = float(filters.get("marketStepSize") or filters.get("stepSize") or 0)
+            minimum = float(filters.get("marketMinQty") or filters.get("minQty") or 0)
+            maximum = float(filters.get("marketMaxQty") or filters.get("maxQty") or 0)
+            if not math.isfinite(step) or step <= 0 or not math.isfinite(minimum) or minimum <= 0:
+                raise RuntimeError("market_quantity_filters_unavailable")
+            minimum_notional = float(filters.get("minNotional") or 0)
+            required_quantity = max(minimum, minimum_notional / reference if minimum_notional > 0 else minimum)
+            quantity = math.ceil((required_quantity / step) - 1e-12) * step
+            if not math.isfinite(quantity) or quantity <= 0 or (maximum > 0 and quantity > maximum):
+                raise RuntimeError("minimum_test_quantity_exceeds_market_filter")
+            quantity_text = format(quantity, ".12f").rstrip("0").rstrip(".")
+            params: dict[str, Any] = {
+                "symbol": normalized_symbol,
+                "side": "BUY",
+                "type": "MARKET",
+                "quantity": quantity_text,
+                "newOrderRespType": "ACK",
+            }
+            if self.config.market == "spot":
+                endpoint = "/api/v3/order/test"
+            else:
+                endpoint = "/fapi/v1/order/test"
+                mode = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+                if not isinstance(mode, dict) or mode.get("error") or not isinstance(mode.get("dualSidePosition"), bool):
+                    return {"ok": False, "order_submitted": False, "error": "futures_position_mode_unavailable",
+                            "detail": mode}
+                if mode["dualSidePosition"]:
+                    params["positionSide"] = "LONG"
+            response = self._request("POST", endpoint, signed=True, params=params)
+            if not isinstance(response, dict) or response.get("error"):
+                return {"ok": False, "order_submitted": False, "error": "binance_test_order_validation_failed",
+                        "response": response, "endpoint": endpoint}
+            cache_key = self._testnet_trade_permission_cache_key()
+            with _TESTNET_TRADE_PERMISSION_LOCK:
+                _TESTNET_TRADE_PERMISSION_CACHE[cache_key] = (
+                    time.monotonic() + _TESTNET_TRADE_PERMISSION_TTL_SECONDS
+                )
+            return {
+                "ok": True,
+                "verified": True,
+                "order_submitted": False,
+                "matching_engine_reached": False,
+                "validation_request_sent": True,
+                "endpoint": endpoint,
+                "market": self.config.market,
+                "symbol": normalized_symbol,
+                "permission_ttl_seconds": _TESTNET_TRADE_PERMISSION_TTL_SECONDS,
+            }
+        except Exception as exc:
+            return {"ok": False, "order_submitted": False,
+                    "error": "testnet_trade_permission_validation_failed",
+                    "detail": str(exc)[:240]}
 
     def _validate_live_api_restrictions(self, restrictions: dict[str, Any]) -> str | None:
         """Fail closed unless Binance confirms IP allowlisting and least privilege."""
