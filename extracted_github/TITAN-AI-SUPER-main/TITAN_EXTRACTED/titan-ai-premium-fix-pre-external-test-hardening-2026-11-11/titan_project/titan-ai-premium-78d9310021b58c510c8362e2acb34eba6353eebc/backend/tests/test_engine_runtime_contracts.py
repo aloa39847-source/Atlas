@@ -30,3 +30,10 @@ def test_runtime_contract_check_does_not_claim_external_connectivity():
 def test_unknown_engine_is_reported_as_unmapped():
     result = inspect_engine_runtime_contract("not_a_real_engine")
     assert result["status"] == "unmapped"
+
+
+def test_execution_engine_contract_explicitly_states_testnet_only_live_hard_lock():
+    contract = ENGINE_INTEGRATION_MAP["trade_execution"]
+    assert contract["authority"] == "testnet_worker_only_live_hard_disabled"
+    assert "Spot/Futures Testnet" in contract["integration"]
+    assert "Live execution is hard-disabled" in contract["integration"]
