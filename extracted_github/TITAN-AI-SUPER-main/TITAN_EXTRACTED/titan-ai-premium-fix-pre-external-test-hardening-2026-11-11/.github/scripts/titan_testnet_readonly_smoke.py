@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Spot Testnet permission smoke test. It validates TRADE scope via order/test only; no order is submitted."""
+"""Spot/Futures Testnet permission smoke test. TRADE scope uses order/test only; no order is submitted."""
 from __future__ import annotations
 
 import json
@@ -164,10 +164,19 @@ def main() -> int:
             "error": None if valid_symbol else "symbol_missing_ambiguous_or_not_trading",
         }
 
-    # Futures metadata is checked independently using its official Testnet
-    # endpoint. No Futures credentials or trading permissions are inferred.
+    # Futures public metadata is checked independently. When separate Futures
+    # Testnet credentials are configured, also verify signed account access and
+    # TRADE scope with /fapi/v1/order/test (never the matching engine).
+    futures_credentials_present = bool(
+        os.getenv("BINANCE_TESTNET_FUTURES_API_KEY")
+        and os.getenv("BINANCE_TESTNET_FUTURES_API_SECRET")
+    )
     futures_adapter = BinanceTestnetAdapter(BinanceConfig(
-        enabled=False, environment="testnet", market="futures",
+        enabled=False,
+        environment="testnet",
+        market="futures",
+        api_key_ref="env:BINANCE_TESTNET_FUTURES_API_KEY" if futures_credentials_present else None,
+        api_secret_ref="env:BINANCE_TESTNET_FUTURES_API_SECRET" if futures_credentials_present else None,
     ))
     futures_info = futures_adapter.get_exchange_info(symbol)
     futures_symbols = futures_info.get("symbols") if isinstance(futures_info, dict) else None
@@ -176,14 +185,53 @@ def main() -> int:
         if isinstance(item, dict) and item.get("symbol") == symbol
     ]
     futures_valid = len(futures_match) == 1 and futures_match[0].get("status") == "TRADING"
+    futures_account_status = futures_adapter.status() if futures_credentials_present else {
+        "configured": False, "connected": None,
+    }
+    futures_auth_ok = futures_account_status.get("connected") is True
+    futures_trade_validation = {
+        "ok": None, "skipped": True,
+        "reason": "Separate Futures Testnet API credentials are not both configured.",
+        "order_submitted": False, "matching_engine_reached": False,
+    }
+    if futures_credentials_present:
+        if futures_auth_ok and futures_account_status.get("account_can_trade") is True:
+            futures_trade_validation = futures_adapter.validate_testnet_trade_permission(symbol)
+        else:
+            futures_trade_validation = {
+                "ok": False, "skipped": True,
+                "error": "futures_testnet_account_authentication_or_canTrade_failed",
+                "account_status": {
+                    "connected": futures_account_status.get("connected"),
+                    "account_check": futures_account_status.get("account_check"),
+                    "account_can_trade": futures_account_status.get("account_can_trade"),
+                },
+                "order_submitted": False, "matching_engine_reached": False,
+            }
+    report["futures_testnet_account_auth"] = {
+        "ok": futures_auth_ok if futures_credentials_present else None,
+        "skipped": not futures_credentials_present,
+        "credentials_present": futures_credentials_present,
+        "account_check": futures_account_status.get("account_check"),
+        "account_can_trade": futures_account_status.get("account_can_trade"),
+        "api_key_trade_permission_verified": futures_account_status.get("api_key_trade_permission_verified"),
+        "execution_ready": futures_account_status.get("execution_ready", False),
+        "base_url": futures_adapter._base_url(),
+    }
+    report["futures_testnet_trade_permission_validation"] = futures_trade_validation
     report["futures_testnet_exchange_info"] = {
         "ok": futures_valid,
         "base_url": futures_adapter._base_url(),
         "symbol": symbol if futures_valid else None,
         "status": futures_match[0].get("status") if len(futures_match) == 1 else None,
         "error": None if futures_valid else "futures_testnet_symbol_missing_or_not_trading",
-        "account_auth_verified": False,
-        "note": "Public Futures Testnet endpoint only; separate Futures API credentials are not tested here.",
+        "account_auth_verified": futures_auth_ok if futures_credentials_present else False,
+        "trade_permission_verified": futures_trade_validation.get("verified") is True,
+        "note": (
+            "Signed Futures Testnet account and non-matching-engine TRADE permission were checked."
+            if futures_credentials_present else
+            "Public Futures Testnet metadata only; separate Futures API credentials are not configured."
+        ),
     }
 
     # Analysis is another independent read-only check. Capture failures rather
@@ -217,11 +265,19 @@ def main() -> int:
     finally:
         engine.dispose()
 
+    futures_private_check_ok = (
+        not futures_credentials_present
+        or (
+            report["futures_testnet_account_auth"].get("ok") is True
+            and report.get("futures_testnet_trade_permission_validation", {}).get("ok") is True
+        )
+    )
     checks = [
         report["testnet_account_auth"].get("ok") is True,
         report.get("testnet_trade_permission_validation", {}).get("ok") is True,
         report["testnet_exchange_info"].get("ok") is True,
         report["futures_testnet_exchange_info"].get("ok") is True,
+        futures_private_check_ok,
         report.get("market_data", {}).get("ok") is True,
         report.get("analysis", {}).get("ok") is True,
     ]
@@ -231,14 +287,25 @@ def main() -> int:
         == "binance_location_restricted_auth_not_verified"
     )
     report["external_access_blocked"] = location_restricted
-    report["order_test_endpoint_called"] = bool(report.get("testnet_trade_permission_validation", {}).get("validation_request_sent"))
+    report["order_test_endpoint_called"] = bool(
+        report.get("testnet_trade_permission_validation", {}).get("validation_request_sent")
+        or report.get("futures_testnet_trade_permission_validation", {}).get("validation_request_sent")
+    )
+    report["order_test_endpoint_calls"] = {
+        "spot": bool(report.get("testnet_trade_permission_validation", {}).get("validation_request_sent")),
+        "futures": bool(report.get("futures_testnet_trade_permission_validation", {}).get("validation_request_sent")),
+    }
     report["order_submitted"] = False
     report["matching_engine_reached"] = False
-    report["next_stage"] = (
-        "spot_testnet_order_lifecycle_requires_separate_explicit_approval"
-        if report.get("testnet_trade_permission_validation", {}).get("ok")
-        else "enable_testnet_api_key_trade_permission_then_repeat_order_test_validation"
-    )
+    if not futures_credentials_present:
+        report["next_stage"] = "configure_separate_futures_testnet_credentials_to_verify_futures_trade_scope"
+    elif (
+        report.get("testnet_trade_permission_validation", {}).get("ok")
+        and report.get("futures_testnet_trade_permission_validation", {}).get("ok")
+    ):
+        report["next_stage"] = "spot_and_futures_testnet_order_lifecycle_requires_separate_explicit_approval"
+    else:
+        report["next_stage"] = "resolve_testnet_account_or_trade_permission_failures_before_order_lifecycle_testing"
     emit(report)
     # External access restrictions are a failed live-verification gate.
     # They must never be converted into a successful CI result: authentication
