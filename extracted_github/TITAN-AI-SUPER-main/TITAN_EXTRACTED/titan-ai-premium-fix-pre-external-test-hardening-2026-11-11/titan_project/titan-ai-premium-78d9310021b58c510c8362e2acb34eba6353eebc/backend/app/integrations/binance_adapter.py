@@ -903,18 +903,19 @@ class BinanceTestnetAdapter:
     def close_position(self, symbol: str, side: str, quantity: float, *, leverage: float = 1.0,
                        idempotency_key: str | None = None,
                        position_side: str | None = None) -> dict[str, Any]:
-        position_side = str(side or "").strip().upper()
-        if position_side in {"BUY", "LONG", "LONG_SPOT"}:
+        raw_position_side = str(side or "").strip().upper()
+        if raw_position_side in {"BUY", "LONG", "LONG_SPOT"}:
             close_side = "SELL"
-        elif position_side in {"SELL", "SHORT"}:
+            inferred_position_side = "LONG"
+        elif raw_position_side in {"SELL", "SHORT"}:
             close_side = "BUY"
+            inferred_position_side = "SHORT"
         else:
             return {"ok": False, "sent_to_exchange": False, "error": "invalid_position_side_for_close"}
-        inferred_position_side = (
-            "LONG" if position_side in {"BUY", "LONG", "LONG_SPOT"}
-            else "SHORT" if position_side in {"SELL", "SHORT"} else None
+        selected_position_side = (
+            str(position_side).strip().upper() if position_side is not None
+            else inferred_position_side
         )
-        selected_position_side = str(position_side or inferred_position_side or "").upper() or None
         return self.place_order(symbol, close_side, "MARKET", quantity, leverage=leverage,
                                 reduce_only=self.config.market == "futures",
                                 idempotency_key=idempotency_key,
