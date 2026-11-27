@@ -88,6 +88,8 @@ def test_core_start_claims_demo_spot_or_futures_and_blocks_duplicate_start(tmp_p
     db = dbmod.SessionLocal()
     try:
         core_service.ensure_bootstrap(db)
+        with pytest.raises(ValueError, match="account_target_environment_mode_mismatch"):
+            core_service.set_state(db, account_target="testnet", environment_mode="live")
         prepared = core_service.start_bot(db, account_target="demo")
         assert prepared["ok"] is True
         assert prepared["state"]["bot_run_state"] == "starting"
