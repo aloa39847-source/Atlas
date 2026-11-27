@@ -366,6 +366,12 @@ class TitanCoreService:
             MarketType.SPOT.value, MarketType.FUTURES.value,
         }:
             raise ValueError("emergency_reset_account_or_market_unsupported")
+        # The persisted status can be stopped while a timed-out thread is
+        # still returning from an in-flight exchange request. Never clear the
+        # emergency latch until the actual supervisor confirms termination.
+        from app.services.demo_worker_supervisor import demo_worker_supervisor
+        if demo_worker_supervisor.status().get("running") is True:
+            raise ValueError("worker_must_be_stopped_before_emergency_reset")
         shadow = target == "demo"
         uncertain = db.execute(select(OrderRecord).where(
             OrderRecord.environment_mode == target, OrderRecord.market_type == market,
