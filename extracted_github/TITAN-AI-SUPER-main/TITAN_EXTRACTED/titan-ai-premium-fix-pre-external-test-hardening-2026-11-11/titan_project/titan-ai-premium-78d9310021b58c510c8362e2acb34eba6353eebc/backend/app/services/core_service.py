@@ -51,8 +51,10 @@ def _evaluate_decision_advisory_safely(db: Session, context: dict[str, Any]) -> 
         safe_report = dict(report)
         safe_report["decision_modified"] = False
         safe_report["action_authority"] = "none"
-        safe_report["final_decision_owner"] = "TITAN"
-        safe_report["risk_veto_owner"] = "independent_risk_manager"
+        if "final_decision_owner" in safe_report:
+            safe_report["final_decision_owner"] = "TITAN"
+        if "risk_veto_owner" in safe_report:
+            safe_report["risk_veto_owner"] = "independent_risk_manager"
         return safe_report
     except Exception as exc:
         unavailable["error_type"] = type(exc).__name__
