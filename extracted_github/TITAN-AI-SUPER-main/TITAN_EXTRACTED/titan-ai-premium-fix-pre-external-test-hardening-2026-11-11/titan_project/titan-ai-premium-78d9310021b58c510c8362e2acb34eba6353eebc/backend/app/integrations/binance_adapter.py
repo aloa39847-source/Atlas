@@ -716,6 +716,7 @@ class BinanceTestnetAdapter:
                 "error": "futures_order_side_position_side_mismatch",
                 "side": normalized_side,
                 "position_side": selected_position_side,
+                "expected_order_side": expected_order_side,
                 "reduce_only": bool(reduce_only),
             }
 
