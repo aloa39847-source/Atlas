@@ -50,7 +50,9 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     let riskSimulationCalls = 0
     let futuresOrderbookBacktests = 0
     let testnetPermissionCalls = 0
+    let testnetReconcileCalls = 0
     let masterStarts = 0
+    let mockEmergencyStop = false
     let mockTarget = 'demo'
     let mockMarket = 'spot'
     let mockBotRunState = 'stopped'
@@ -96,7 +98,7 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
         body = { ok: true }
       }
       else if (path === '/api/system/status') body = {
-        state: { market_type: mockMarket, environment_mode: mockTarget === 'live' ? 'live' : 'demo', account_target: mockTarget, bot_run_state: mockBotRunState, emergency_stop: false, trading_paused: false, live_confirmed_by_user: false },
+        state: { market_type: mockMarket, environment_mode: mockTarget === 'live' ? 'live' : 'demo', account_target: mockTarget, bot_run_state: mockBotRunState, emergency_stop: mockEmergencyStop, trading_paused: false, live_confirmed_by_user: false },
         engines: [{ key: 'market', name: 'Market Engine', status: 'ready' }, { key: 'risk', name: 'Risk Manager', status: 'implemented_partial' }],
         integrations: { ai_providers: { status: 'ready' }, binance: { server_live_enabled: false } },
       }
@@ -118,6 +120,17 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
         testnetPermissionCalls += 1
         testnetPermissionVerified = true
         body = { ok: true, verified: true, order_submitted: false, matching_engine_reached: false, market: mockMarket, symbol: 'BTCUSDT' }
+      }
+      else if (path === '/api/binance/testnet/reconcile') {
+        testnetReconcileCalls += 1
+        mockEmergencyStop = true
+        body = {
+          ok: true, market: mockMarket, orders_submitted: false,
+          order_sync: { ok: true, orders_checked: 2, orders_status_updated: 2, orders_with_fills: 1, positions_updated: 1, fees_pending: 0, orders_resolved: 1 },
+          open_order_reconciliation: { ok: true, local_open_orders_count: 0, remote_open_orders_count: 0 },
+          manual_review_required: false, emergency_stop_active: true,
+          note: 'Read-only reconciliation; emergency stop remains latched.',
+        }
       }
       else if (path === '/api/master/start') {
         masterStarts += 1
@@ -259,6 +272,11 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     assert.equal(masterStarts, 1, 'Testnet worker must start only after the explicit Master Control action')
     await page.getByRole('button', { name: 'إيقاف المحرك بالكامل' }).click()
     await page.waitForFunction(() => document.body.innerText.includes('تم تنفيذ طلب الإيقاف.'))
+    await page.getByRole('button', { name: 'مصالحة حالة أوامر Testnet (قراءة فقط)' }).click()
+    await page.getByText(/اكتملت المصالحة للقراءة فقط: فُحص 2 أمر/).waitFor()
+    assert.equal(testnetReconcileCalls, 1, 'manual Testnet reconciliation button did not call its API')
+    assert.equal(masterStarts, 1, 'manual reconciliation must never start the trading worker')
+    assert.equal(mockEmergencyStop, true, 'reconciliation must not clear Emergency Stop')
     await page.locator('.tt-feature-grid select').nth(1).selectOption('futures')
     await page.waitForFunction(() => window.__lastWsUrl?.startsWith('wss://fstream.binance.com/'))
     await page.locator('.tt-feature-grid select').nth(1).selectOption('spot')
