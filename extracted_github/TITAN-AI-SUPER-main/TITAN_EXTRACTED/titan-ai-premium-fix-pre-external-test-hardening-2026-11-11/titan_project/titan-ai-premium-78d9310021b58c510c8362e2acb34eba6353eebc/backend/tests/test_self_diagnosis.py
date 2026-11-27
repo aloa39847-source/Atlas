@@ -254,6 +254,7 @@ def test_binance_diagnostics_checks_market_scoped_futures_credentials_and_permis
     class ConnectedFuturesAdapter:
         def __init__(self, config):
             configs.append(config)
+            self.config = config
             assert config.enabled is True
             assert config.environment == "testnet"
 
