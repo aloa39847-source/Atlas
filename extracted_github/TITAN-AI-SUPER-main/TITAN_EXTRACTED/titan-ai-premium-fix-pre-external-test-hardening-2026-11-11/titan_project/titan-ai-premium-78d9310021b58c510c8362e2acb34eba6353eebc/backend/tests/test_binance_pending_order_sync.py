@@ -178,3 +178,22 @@ def test_legacy_close_fill_without_quote_watermark_fails_closed(tmp_path):
     finally:
         db.close()
         engine.dispose()
+
+
+def test_spot_order_lookup_derives_average_from_cumulative_quote_when_avg_price_absent(tmp_path):
+    engine, db = _session(tmp_path)
+    response = _partial_close_response()
+    response.pop("avgPrice")
+    adapter = FakeOrderStatusAdapter(response)
+    try:
+        with pytest.raises(RuntimeError, match="partial_exchange_fill_manual_reconciliation_required"):
+            _sync_pending_orders(db, adapter, "testnet", "spot")
+        position = db.get(PositionRecord, 1)
+        order = db.get(OrderRecord, 1)
+        assert order.avg_fill_price == pytest.approx(7.14 / 0.07)
+        assert position.quantity == pytest.approx(0.03)
+        assert position.realized_pnl == pytest.approx(0.14)
+        assert order.metadata_json["applied_filled_quote"] == pytest.approx(7.14)
+    finally:
+        db.close()
+        engine.dispose()
