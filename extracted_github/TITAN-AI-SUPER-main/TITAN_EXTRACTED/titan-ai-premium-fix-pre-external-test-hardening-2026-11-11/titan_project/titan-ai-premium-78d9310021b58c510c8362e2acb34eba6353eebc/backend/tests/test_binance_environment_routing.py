@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.core.config import settings
 from app.services import binance_execution as execution_module
 from app.services.binance_execution import binance_execution_service
@@ -563,3 +565,92 @@ def test_futures_position_side_and_order_direction_must_match(monkeypatch):
     assert result["error"] == "futures_order_side_position_side_mismatch"
     assert result["position_side"] == "LONG"
     assert result["expected_order_side"] == "SELL"
+
+
+@pytest.mark.parametrize(
+    ("hedge_mode", "expected_position_params"),
+    [
+        (True, {"positionSide": "LONG"}),
+        (False, {"reduceOnly": "true"}),
+    ],
+)
+def test_futures_reduce_only_submission_uses_exchange_position_mode_parameters(
+    monkeypatch, hedge_mode, expected_position_params,
+):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_execution_ready", lambda: None)
+    monkeypatch.setattr(adapter, "get_account", lambda: {
+        "canTrade": True, "availableBalance": "1000",
+    })
+    monkeypatch.setattr(adapter, "_symbol_filters", lambda symbol: {
+        "avgPriceMins": 0, "stepSize": "0.001", "minQty": "0.001",
+        "maxQty": "100", "minNotional": "5",
+    })
+    monkeypatch.setattr(adapter, "_market_price", lambda symbol: 100.0)
+    monkeypatch.setattr(adapter, "get_open_orders", lambda symbol=None: [])
+    monkeypatch.setattr(adapter, "_open_order_conduct_veto", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adapter.gateway, "validate", lambda **kwargs: SimpleNamespace(
+        ok=True, normalized={}, to_dict=lambda: {},
+    ))
+
+    calls = []
+    def fake_request(method, path, signed=False, params=None):
+        calls.append((method, path, signed, dict(params or {})))
+        if method == "GET" and path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": hedge_mode}
+        if method == "POST" and path == "/fapi/v1/order":
+            return {
+                "symbol": "BTCUSDT", "orderId": 987, "status": "NEW",
+                "executedQty": "0", "avgPrice": "0",
+                "clientOrderId": (params or {}).get("newClientOrderId"),
+            }
+        raise AssertionError(f"Unexpected Binance request: {method} {path}")
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.place_order(
+        "BTCUSDT", "SELL", "MARKET", 0.02,
+        leverage=2.0, reduce_only=True,
+        idempotency_key="futures-hedge-close-0001",
+        position_side="LONG",
+    )
+
+    assert result["ok"] is True
+    assert result["sent_to_exchange"] is True
+    request = next(call for call in calls if call[0] == "POST")
+    params = request[3]
+    assert params["side"] == "SELL"
+    assert params["quantity"] == "0.02"
+    for key, value in expected_position_params.items():
+        assert params[key] == value
+    if hedge_mode:
+        assert "reduceOnly" not in params
+    else:
+        assert "positionSide" not in params
+
+
+def test_futures_order_submission_stops_when_position_mode_cannot_be_verified(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_execution_ready", lambda: None)
+    monkeypatch.setattr(adapter, "get_account", lambda: {
+        "canTrade": True, "availableBalance": "1000",
+    })
+    calls = []
+
+    def fake_request(method, path, signed=False, params=None):
+        calls.append((method, path))
+        return {"error": "position_mode_unavailable"}
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.place_order(
+        "BTCUSDT", "SELL", "MARKET", 0.02,
+        leverage=2.0, reduce_only=True, position_side="LONG",
+        idempotency_key="futures-mode-unavailable-0001",
+    )
+    assert result["ok"] is False
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "futures_position_mode_unavailable"
+    assert calls == [("GET", "/fapi/v1/positionSide/dual")]
