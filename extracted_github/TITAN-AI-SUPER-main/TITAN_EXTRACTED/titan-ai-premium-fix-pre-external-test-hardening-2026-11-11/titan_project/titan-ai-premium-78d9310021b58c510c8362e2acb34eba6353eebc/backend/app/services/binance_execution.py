@@ -277,10 +277,20 @@ class BinanceExecutionService:
                     or position.status != "open"
                     or position.environment_mode != target
                     or position.market_type != "futures"
-                    or not math.isfinite(float(position.quantity or 0))
-                    or float(position.quantity or 0) <= 0
                 ):
                     return {"ok": False, "sent_to_exchange": False, "error": "futures_close_position_not_open_or_environment_mismatch"}
+                try:
+                    open_position_quantity = float(position.quantity)
+                except (TypeError, ValueError, OverflowError):
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_position_quantity_invalid"}
+                if (
+                    not math.isfinite(open_position_quantity)
+                    or open_position_quantity <= 0
+                    or qty > open_position_quantity + 1e-10
+                ):
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_quantity_exceeds_open_position"}
+                if str(position.symbol).replace("/", "").upper() != str(symbol).replace("/", "").upper():
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_symbol_position_mismatch"}
                 if position.side == "long":
                     futures_position_side = "LONG"
                 elif position.side == "short":
