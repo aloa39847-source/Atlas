@@ -549,3 +549,54 @@ def test_futures_close_rejects_position_symbol_mismatch(tmp_path, monkeypatch):
     finally:
         db.close()
         engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("order_side", "expected_leg"),
+    [("BUY", "LONG"), ("SELL", "SHORT")],
+)
+def test_futures_entry_persists_and_passes_expected_position_leg(
+    tmp_path, monkeypatch, order_side, expected_leg,
+):
+    engine, db = _session(tmp_path)
+    state = db.get(SystemState, 1)
+    state.market_type = "futures"
+    db.add(state)
+    db.commit()
+    adapter = FakeTestnetAdapter({
+        "ok": True,
+        "sent_to_exchange": True,
+        "response": {
+            "status": "FILLED",
+            "orderId": 90234,
+            "clientOrderId": "titan-futures-entry",
+            "executedQty": "0.1",
+            "avgPrice": "100.0",
+            "cummulativeQuoteQty": "10.0",
+        },
+        "fee_accounting": {"ok": False, "pending": True, "error": "fixture"},
+    })
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {"ready": True})
+    try:
+        result = binance_execution_service.execute_order(
+            db,
+            symbol="BTCUSDT",
+            side=order_side,
+            order_type="market",
+            quantity=0.1,
+            price=100.0,
+            leverage=2.0,
+            reduce_only=False,
+            idempotency_key=f"futures-entry-{expected_leg.lower()}-0001",
+            order_metadata={"intent": "open", "reference_price": 100.0},
+        )
+        assert result["ok"] is True
+        assert result["sent_to_exchange"] is True
+        assert adapter.place_calls == 1
+        assert adapter.place_kwargs[0]["position_side"] == expected_leg
+        order = db.execute(select(OrderRecord)).scalar_one()
+        assert order.metadata_json["futures_position_side"] == expected_leg
+    finally:
+        db.close()
+        engine.dispose()
