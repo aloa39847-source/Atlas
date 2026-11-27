@@ -3243,6 +3243,7 @@ async def binance_testnet_account(request):
 
 
 async def binance_testnet_reconcile(request):
+    """Synchronize individual durable order states while the Testnet worker is stopped."""
     auth_error = _binance_auth_error(request)
     if auth_error:
         return auth_error
@@ -3251,6 +3252,45 @@ async def binance_testnet_reconcile(request):
         market = str(request.query_params.get("market") or "spot").strip().lower()
         if market not in {"spot", "futures"}:
             return J({"ok": False, "error": "unsupported_testnet_market"}, 400)
+        selected = core_service.get_state(db)
+        if str(selected.get("account_target") or "").lower() != "testnet":
+            return J({"ok": False, "error": "testnet_account_not_selected",
+                      "orders_submitted": False}, 409)
+        if str(selected.get("market_type") or "").lower() != market:
+            return J({"ok": False, "error": "testnet_market_selection_mismatch",
+                      "selected_market": selected.get("market_type"),
+                      "requested_market": market, "orders_submitted": False}, 409)
+
+        from app.services.demo_worker_supervisor import demo_worker_supervisor
+        worker = demo_worker_supervisor.status()
+        active_states = {"starting", "running", "analyzing", "executing", "waiting_data"}
+        if worker.get("running") is True or str(selected.get("bot_run_state") or "stopped").lower() in active_states:
+            return J({
+                "ok": False, "error": "stop_testnet_worker_before_manual_reconciliation",
+                "worker": worker, "bot_run_state": selected.get("bot_run_state"),
+                "orders_submitted": False,
+            }, 409)
+
+        adapter = _get_binance_adapter(market)
+        from app.services.binance_trading_worker import _sync_pending_orders
+        try:
+            order_sync = _sync_pending_orders(db, adapter, "testnet", market)
+        except Exception as sync_error:
+            db.rollback()
+            latest = core_service.get_state(db)
+            if latest.get("emergency_stop") is not True:
+                core_service.set_state(db, emergency_stop=True)
+                latest = core_service.get_state(db)
+            return J({
+                "ok": False,
+                "error": "testnet_order_status_sync_requires_manual_review",
+                "detail": str(sync_error)[:240],
+                "order_sync": {"ok": False},
+                "manual_review_required": True,
+                "emergency_stop_active": bool(latest.get("emergency_stop")),
+                "orders_submitted": False,
+            }, 409)
+
         local_rows = db.execute(select(OrderRecord).where(
             OrderRecord.environment_mode == "testnet",
             OrderRecord.market_type == market,
@@ -3262,11 +3302,40 @@ async def binance_testnet_reconcile(request):
             "orderId": row.exchange_order_id,
             "clientOrderId": row.client_order_id,
         } for row in local_rows]
-        adapter = _get_binance_adapter(market)
-        return J(adapter.reconcile(local_open_orders=local_open_orders))
+        open_order_result = adapter.reconcile(local_open_orders=local_open_orders)
+        if not isinstance(open_order_result, dict) or open_order_result.get("ok") is not True:
+            latest = core_service.get_state(db)
+            if latest.get("emergency_stop") is not True:
+                core_service.set_state(db, emergency_stop=True)
+                latest = core_service.get_state(db)
+            return J({
+                "ok": False,
+                "error": "testnet_open_order_reconciliation_mismatch",
+                "order_sync": order_sync,
+                "open_order_reconciliation": open_order_result,
+                "manual_review_required": True,
+                "emergency_stop_active": bool(latest.get("emergency_stop")),
+                "orders_submitted": False,
+            }, 409)
+
+        final_state = core_service.get_state(db)
+        return J({
+            "ok": True,
+            "market": market,
+            "order_sync": order_sync,
+            "open_order_reconciliation": open_order_result,
+            "manual_review_required": False,
+            "emergency_stop_active": bool(final_state.get("emergency_stop")),
+            "note": (
+                "Order states, fills, positions and fees were synchronized read-only. "
+                "This action does not clear Emergency Stop or start the worker; use the separate verified reset flow."
+            ),
+            "orders_submitted": False,
+        })
     except Exception as e:
         db.rollback()
-        return J({"ok": False, "error": str(e)}, 400)
+        return J({"ok": False, "error": "testnet_reconciliation_failed",
+                  "detail": str(e)[:240], "orders_submitted": False}, 409)
     finally:
         db.close()
 
