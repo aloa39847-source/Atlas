@@ -266,18 +266,24 @@ class TitanCoreService:
                   live_confirm: bool | None = None) -> dict[str, Any]:
         s = self._state(db)
         old = self.get_state(db)
+        requested_targets: list[str] = []
+        if account_target is not None:
+            requested_account_target = str(account_target).strip().lower()
+            if requested_account_target not in {"demo", "testnet", "live"}:
+                raise ValueError("account_target must be demo, testnet, or live")
+            requested_targets.append(requested_account_target)
+        if environment_mode is not None:
+            requested_environment = EnvironmentMode(environment_mode)
+            requested_targets.append("live" if requested_environment == EnvironmentMode.LIVE else "demo")
+        if len(set(requested_targets)) > 1:
+            raise ValueError("account_target_environment_mode_mismatch")
+
         active_states = {"starting", "running", "analyzing", "executing", "waiting_data"}
         if str(getattr(s, "bot_run_state", "stopped") or "stopped").lower() in active_states:
             current_target = str(getattr(s, "account_target", "demo") or "demo").strip().lower()
             current_market = str(getattr(s, "market_type", "spot") or "spot").strip().lower()
-            requested_target = None
-            if account_target is not None:
-                requested_target = str(account_target).strip().lower()
-            elif environment_mode is not None:
-                requested_environment = EnvironmentMode(environment_mode)
-                requested_target = "live" if requested_environment == EnvironmentMode.LIVE else "demo"
             requested_market = str(market_type).strip().lower() if market_type is not None else current_market
-            if ((requested_target is not None and requested_target != current_target)
+            if (any(target != current_target for target in requested_targets)
                     or requested_market != current_market):
                 raise ValueError("cannot_change_account_or_market_while_worker_active")
         requested_live = (
