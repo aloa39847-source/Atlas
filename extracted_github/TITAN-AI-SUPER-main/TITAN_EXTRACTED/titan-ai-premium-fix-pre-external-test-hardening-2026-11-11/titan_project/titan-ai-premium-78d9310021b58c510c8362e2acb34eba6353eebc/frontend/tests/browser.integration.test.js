@@ -49,6 +49,12 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     let depthSnapshotLimit = null
     let riskSimulationCalls = 0
     let futuresOrderbookBacktests = 0
+    let testnetPermissionCalls = 0
+    let masterStarts = 0
+    let mockTarget = 'demo'
+    let mockMarket = 'spot'
+    let mockBotRunState = 'stopped'
+    let testnetPermissionVerified = false
 
     await page.addInitScript(() => {
       class FakeWebSocket {
@@ -83,10 +89,44 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
       let body = {}
       if (path === '/api/auth/status') body = { auth_required: false }
       else if (path === '/api/auth/me') body = { authenticated: false }
+      else if (path === '/api/system/state') {
+        const update = route.request().postDataJSON() || {}
+        mockTarget = update.account_target || mockTarget
+        mockMarket = update.market_type || mockMarket
+        body = { ok: true }
+      }
       else if (path === '/api/system/status') body = {
-        state: { market_type: 'spot', environment_mode: 'demo', account_target: 'demo', bot_run_state: 'idle', emergency_stop: false, trading_paused: false },
+        state: { market_type: mockMarket, environment_mode: mockTarget === 'live' ? 'live' : 'demo', account_target: mockTarget, bot_run_state: mockBotRunState, emergency_stop: false, trading_paused: false, live_confirmed_by_user: false },
         engines: [{ key: 'market', name: 'Market Engine', status: 'ready' }, { key: 'risk', name: 'Risk Manager', status: 'implemented_partial' }],
-        integrations: { ai_providers: { status: 'ready' } },
+        integrations: { ai_providers: { status: 'ready' }, binance: { server_live_enabled: false } },
+      }
+      else if (path === '/api/binance/testnet/status') body = ({
+        provider: 'binance_testnet', environment: 'testnet', market: mockMarket, configured: true,
+        connected: true, account_can_trade: true, execution_ready: testnetPermissionVerified,
+        api_key_trade_permission_verified: testnetPermissionVerified,
+        execution_readiness_check: testnetPermissionVerified ? 'ok' : 'api_key_trade_permission_requires_test_order_validation',
+      })
+      else if (path === '/api/binance/live/status') body = { connected: false, execution_ready: false, live_blocked: true }
+      else if (path === '/api/binance/testnet/creds') body = { configured: true, market: mockMarket, environment: 'testnet' }
+      else if (path === '/api/binance/live/creds') body = { configured: false, market: mockMarket, environment: 'live' }
+      else if (path === '/api/binance/execution/preflight') body = ({
+        ok: testnetPermissionVerified, ready: mockTarget === 'testnet' && testnetPermissionVerified,
+        account_target: mockTarget, market: mockMarket, orders_submitted: false,
+        status: { connected: true, execution_ready: testnetPermissionVerified },
+      })
+      else if (path === '/api/binance/testnet/validate-trade-permission') {
+        testnetPermissionCalls += 1
+        testnetPermissionVerified = true
+        body = { ok: true, verified: true, order_submitted: false, matching_engine_reached: false, market: mockMarket, symbol: 'BTCUSDT' }
+      }
+      else if (path === '/api/master/start') {
+        masterStarts += 1
+        mockBotRunState = 'running'
+        body = { ok: true, state: { account_target: mockTarget, market_type: mockMarket, bot_run_state: mockBotRunState } }
+      }
+      else if (path === '/api/master/stop') {
+        mockBotRunState = 'stopped'
+        body = { ok: true, state: { account_target: mockTarget, market_type: mockMarket, bot_run_state: mockBotRunState } }
       }
       else if (path === '/api/decisions') body = { items: [{ id: 1, action: 'HOLD', symbol: 'BTCUSDT', created_at: new Date().toISOString() }] }
       else if (path === '/api/portfolio') body = { snapshot: { equity_estimate: 10000 }, positions: [] }
@@ -205,6 +245,20 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     await page.getByText('بيانات الاختبار وصلت إلى TITAN.').waitFor()
 
     await page.locator('.tt-nav').getByRole('button', { name: /الإعدادات/ }).click()
+    await page.locator('.tt-feature-grid select').first().selectOption('testnet')
+    await page.getByRole('button', { name: 'حفظ اختيار الحساب والسوق' }).click()
+    await page.getByText(/لم يبدأ العامل تلقائياً/).waitFor()
+    assert.equal(masterStarts, 0, 'saving the Testnet account selection must not start the worker')
+    assert.equal(testnetPermissionCalls, 0, 'TRADE scope must be explicitly verified by the user')
+    await page.getByRole('button', { name: 'تحقق من صلاحية API TRADE دون إرسال أمر' }).click()
+    await page.getByText(/تم التحقق · صلاحية مؤقتة 5 دقائق/).waitFor()
+    assert.equal(testnetPermissionCalls, 1, 'dashboard permission button did not call the non-executing order/test validation')
+    assert.equal(masterStarts, 0, 'permission validation must never start the worker')
+    await page.getByRole('button', { name: 'بدء تداول Binance Testnet' }).click()
+    await page.waitForFunction(() => document.body.innerText.includes('تم تشغيل تداول Binance Testnet التجريبي.'))
+    assert.equal(masterStarts, 1, 'Testnet worker must start only after the explicit Master Control action')
+    await page.getByRole('button', { name: 'إيقاف المحرك بالكامل' }).click()
+    await page.waitForFunction(() => document.body.innerText.includes('تم تنفيذ طلب الإيقاف.'))
     await page.locator('.tt-feature-grid select').nth(1).selectOption('futures')
     await page.waitForFunction(() => window.__lastWsUrl?.startsWith('wss://fstream.binance.com/'))
     await page.locator('.tt-feature-grid select').nth(1).selectOption('spot')
