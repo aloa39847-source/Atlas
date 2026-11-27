@@ -9,12 +9,13 @@ from app.services.binance_execution import binance_execution_service
 
 
 class FakeTestnetAdapter:
-    def __init__(self, place_result, lookup_result=None, fee_result=None):
-        self.place_result = place_result
+    def __init__(self, place_result=None, lookup_result=None, fee_result=None, place_error=None):
+        self.place_result = place_result or {"sent_to_exchange": False, "error": "simulated_transport_failure"}
         self.lookup_result = lookup_result or {"error": "order_lookup_not_found"}
         self.fee_result = fee_result or {
             "ok": False, "pending": True, "error": "fee_history_unavailable",
         }
+        self.place_error = place_error
         self.place_calls = 0
         self.lookup_calls = 0
         self.lookup_client_order_ids = []
@@ -25,6 +26,8 @@ class FakeTestnetAdapter:
 
     def place_order(self, **kwargs):
         self.place_calls += 1
+        if self.place_error is not None:
+            raise self.place_error
         return self.place_result
 
     def get_order(self, symbol, *, client_order_id=None, order_id=None):
@@ -240,6 +243,42 @@ def test_timed_out_submission_recovered_as_partial_fill_latches_emergency_stop(t
         assert state.emergency_stop is True
         assert state.bot_run_state == "stopped"
         assert state.bot_stop_reason == "partial_exchange_fill_manual_reconciliation_required"
+        assert adapter.place_calls == 1
+        assert adapter.lookup_calls == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+
+def test_adapter_exception_after_durable_submission_boundary_uses_read_only_lookup(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    adapter = FakeTestnetAdapter(
+        lookup_result={
+            "status": "FILLED",
+            "orderId": 445566,
+            "executedQty": "0.1",
+            "avgPrice": "99.5",
+            "cummulativeQuoteQty": "9.95",
+        },
+        fee_result={"ok": True, "fees_paid_usdt": 0.005, "fee_breakdown": {"USDT": 0.005}},
+        place_error=TimeoutError("transport raised after request write"),
+    )
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {"ready": True})
+    monkeypatch.setattr("app.services.binance_execution.log_event", lambda *args, **kwargs: None)
+    try:
+        result = _execute(db, "testnet-submit-exception-lookup-0001")
+        order = db.execute(select(OrderRecord)).scalar_one()
+        state = db.get(SystemState, 1)
+
+        assert result["ok"] is True
+        assert result["reconciled_after_uncertain_submit"] is True
+        assert result["status"] == "filled"
+        assert order.status == "filled"
+        assert order.exchange_order_id == "445566"
+        assert order.fees_paid == 0.005
+        assert state.emergency_stop is False
         assert adapter.place_calls == 1
         assert adapter.lookup_calls == 1
     finally:
