@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.models import db as dbmod
 from app.models.entities import SystemState
 from app.scripts import run_demo_loop
@@ -90,6 +92,17 @@ def test_core_start_claims_demo_spot_or_futures_and_blocks_duplicate_start(tmp_p
         assert prepared["ok"] is True
         assert prepared["state"]["bot_run_state"] == "starting"
         assert prepared["checks"]["continuous_worker_available"] is True
+        # API callers must not switch account or market while the worker owns
+        # the current execution context, even when the dashboard is bypassed.
+        for change in (
+            {"market_type": "futures"},
+            {"account_target": "testnet"},
+            {"environment_mode": "live"},
+        ):
+            with pytest.raises(ValueError, match="cannot_change_account_or_market_while_worker_active"):
+                core_service.set_state(db, **change)
+        assert core_service.get_state(db)["account_target"] == "demo"
+        assert core_service.get_state(db)["market_type"] == "spot"
         try:
             core_service.start_bot(db, account_target="demo")
             assert False, "duplicate startup must be rejected"
