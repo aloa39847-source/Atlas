@@ -395,19 +395,166 @@ class BinanceExecutionService:
             # A transport/HTTP error may mean Binance accepted the order but the
             # response was lost. Persist UNKNOWN and latch emergency stop; never retry.
             error = str(result.get("error") or result.get("reason") or "execution_rejected")
-            uncertain = any(token in error.lower() for token in ("timeout", "timed out", "urlopen", "connection", "http_error", "remote end", "incomplete read"))
-            record.status = "unknown" if uncertain else "rejected"
-            record.reason = error[:500]
-            db.add(record)
+            uncertain = any(token in error.lower() for token in (
+                "timeout", "timed out", "urlopen", "connection", "http_error",
+                "remote end", "incomplete read",
+            ))
             if uncertain:
+                # The submit response may have been lost after Binance accepted
+                # the order. Perform exactly one signed, read-only lookup using
+                # the deterministic client order ID. Never re-submit here.
+                lookup = None
+                lookup_error = None
+                lookup_order = getattr(adapter, "get_order", None)
+                if callable(lookup_order):
+                    try:
+                        lookup = lookup_order(
+                            symbol, client_order_id=record.client_order_id,
+                        )
+                    except Exception as lookup_exc:
+                        lookup_error = f"{type(lookup_exc).__name__}:{lookup_exc}"[:200]
+                else:
+                    lookup_error = "read_only_order_lookup_unavailable"
+
+                status_map = {
+                    "new": "new",
+                    "partially_filled": "partially_filled",
+                    "filled": "filled",
+                    "canceled": "cancelled",
+                    "cancelled": "cancelled",
+                    "expired": "expired",
+                    "rejected": "rejected",
+                }
+                lookup_status = (
+                    str(lookup.get("status") or "").strip().lower()
+                    if isinstance(lookup, dict) and not lookup.get("error") else ""
+                )
+                reconciled_status = status_map.get(lookup_status)
+                reconciled = False
+                if reconciled_status is not None:
+                    try:
+                        executed = float(lookup.get("executedQty", 0) or 0)
+                        average = float(lookup.get("avgPrice", 0) or 0)
+                        if average <= 0 and executed > 0:
+                            quote_total = float(lookup.get("cummulativeQuoteQty", 0) or 0)
+                            if quote_total > 0:
+                                average = quote_total / executed
+                        lookup_symbol = str(lookup.get("symbol") or symbol).replace("/", "").upper()
+                        lookup_client_id = str(lookup.get("clientOrderId") or record.client_order_id)
+                        valid_snapshot = (
+                            lookup_symbol == str(symbol).replace("/", "").upper()
+                            and lookup_client_id == record.client_order_id
+                            and math.isfinite(executed) and executed >= 0
+                            and executed <= qty + 1e-8
+                            and math.isfinite(average) and average >= 0
+                            and (executed <= 0 or average > 0)
+                        )
+                    except (TypeError, ValueError, OverflowError, AttributeError):
+                        valid_snapshot = False
+                        executed = average = 0.0
+                    if valid_snapshot:
+                        record.status = reconciled_status
+                        record.exchange_order_id = (
+                            str(lookup.get("orderId"))
+                            if lookup.get("orderId") is not None else record.exchange_order_id
+                        )
+                        record.client_order_id = lookup_client_id
+                        record.filled_quantity = executed
+                        record.avg_fill_price = average or None
+                        record.reason = (
+                            "Order outcome recovered by a signed read-only Binance lookup "
+                            "using the original client order ID after an ambiguous submit response."
+                        )
+                        meta = dict(record.metadata_json or {})
+                        meta["submission_reconciliation"] = {
+                            "method": "read_only_client_order_id_lookup",
+                            "original_submit_error": error[:240],
+                            "exchange_status": lookup_status,
+                        }
+                        if executed > 0 and reconciled_status == "filled":
+                            # Fee accounting is finalized by the normal pending
+                            # order synchronizer before the next worker cycle.
+                            meta.setdefault("fee_accounting_status", "pending")
+                            meta.setdefault("fee_accounting_error", "awaiting_read_only_trade_fee_reconciliation")
+                        record.metadata_json = meta
+                        db.add(record)
+                        reconciled = True
+                        # A recovered partial/cancelled-with-fill can create real
+                        # exposure. Preserve the fill record but stop immediately
+                        # for manual position/protection reconciliation.
+                        partial_exposure = (
+                            executed > 0 and (
+                                reconciled_status == "partially_filled"
+                                or reconciled_status in {"cancelled", "expired"}
+                            )
+                        )
+                        if partial_exposure:
+                            state.emergency_stop = True
+                            state.bot_run_state = "stopped"
+                            state.autonomous_enabled = False
+                            state.bot_stop_reason = "partial_exchange_fill_manual_reconciliation_required"
+                            db.add(state)
+                            log_event(
+                                db, action="master.emergency_stop", severity="critical",
+                                message="A read-only lookup recovered a partial exchange fill; new entries halted for manual position reconciliation.",
+                                details={"order_id": record.id, "client_order_id": record.client_order_id,
+                                         "exchange_status": lookup_status, "filled_quantity": executed},
+                                environment_mode=environment, market_type=market,
+                            )
+                        db.commit()
+                        return {
+                            "ok": True,
+                            "sent_to_exchange": True,
+                            "reconciled_after_uncertain_submit": True,
+                            "order_id": record.id,
+                            "status": record.status,
+                            "exchange_order_id": record.exchange_order_id,
+                            "execution": {
+                                "ok": True,
+                                "sent_to_exchange": True,
+                                "response": lookup,
+                                "reconciled_by": "read_only_client_order_id_lookup",
+                            },
+                        }
+
+                # A missing order, failed lookup, mismatched identity, malformed
+                # fill, or unknown exchange status remains UNKNOWN and fail-closed.
+                record.status = "unknown"
+                record.reason = error[:500]
+                meta = dict(record.metadata_json or {})
+                meta["submission_reconciliation"] = {
+                    "method": "read_only_client_order_id_lookup",
+                    "resolved": False,
+                    "lookup_error": (
+                        str(lookup.get("error") or lookup.get("status"))
+                        if isinstance(lookup, dict) else lookup_error
+                    )[:240] if (isinstance(lookup, dict) or lookup_error) else "no_lookup_result",
+                }
+                record.metadata_json = meta
                 state.emergency_stop = True
                 state.bot_run_state = "stopped"
                 state.autonomous_enabled = False
                 state.bot_stop_reason = "binance_order_outcome_uncertain"
+                db.add(record)
+                db.add(state)
                 log_event(db, action="master.emergency_stop", severity="critical",
-                          message="Binance order outcome uncertain; new orders halted and automatic resubmission prohibited.",
-                          details={"order_id": record.id, "idempotency_key": key},
+                          message="Binance order outcome remains uncertain after read-only client order ID lookup; new orders halted and automatic resubmission prohibited.",
+                          details={"order_id": record.id, "idempotency_key": key,
+                                   "lookup": meta["submission_reconciliation"]},
                           environment_mode=environment, market_type=market)
+                db.commit()
+                return {
+                    "ok": False, "sent_to_exchange": None,
+                    "outcome_uncertain": True,
+                    "reconciled_after_uncertain_submit": False,
+                    "error": error,
+                    "order_id": record.id, "status": record.status,
+                    "execution": result,
+                }
+
+            record.status = "rejected"
+            record.reason = error[:500]
+            db.add(record)
             db.commit()
             return {"ok": False, "sent_to_exchange": False, "error": error,
                     "order_id": record.id, "status": record.status, "execution": result}
