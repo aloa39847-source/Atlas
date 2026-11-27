@@ -450,10 +450,12 @@ class BinanceExecutionService:
                             quote_total = float(lookup.get("cummulativeQuoteQty", 0) or 0)
                             if quote_total > 0:
                                 average = quote_total / executed
-                        lookup_symbol = str(lookup.get("symbol") or symbol).replace("/", "").upper()
-                        lookup_client_id = str(lookup.get("clientOrderId") or record.client_order_id)
+                        lookup_symbol = str(lookup.get("symbol") or "").replace("/", "").upper()
+                        lookup_client_id = str(lookup.get("clientOrderId") or "")
                         valid_snapshot = (
-                            lookup_symbol == str(symbol).replace("/", "").upper()
+                            bool(lookup_symbol)
+                            and bool(lookup_client_id)
+                            and lookup_symbol == str(symbol).replace("/", "").upper()
                             and lookup_client_id == record.client_order_id
                             and math.isfinite(executed) and executed >= 0
                             and executed <= qty + 1e-8
