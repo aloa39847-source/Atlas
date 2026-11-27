@@ -339,6 +339,7 @@ def test_live_trading_is_hard_disabled_without_server_override(monkeypatch):
     assert Settings().live_trading_enabled is False
 
 
+# Server-side Live enablement remains impossible even when a deployment sets the legacy flag.
 def test_live_server_environment_flag_cannot_enable_live_trading(monkeypatch):
     monkeypatch.setenv("TITAN_LIVE_TRADING_ENABLED", "true")
     assert Settings().live_trading_enabled is False
