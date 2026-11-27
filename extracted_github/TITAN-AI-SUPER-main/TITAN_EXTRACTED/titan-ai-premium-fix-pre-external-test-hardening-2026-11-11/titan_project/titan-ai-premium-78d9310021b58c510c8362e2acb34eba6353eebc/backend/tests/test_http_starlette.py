@@ -491,3 +491,66 @@ def test_master_stop_rejects_non_boolean_close_positions_before_stopping(monkeyp
     response = asyncio.run(star_app.master_stop(SimpleNamespace()))
     assert response.status_code == 400
     assert b"close_positions_must_be_boolean" in response.body
+
+
+def test_master_stop_timeout_latches_emergency_stop(monkeypatch):
+    from types import SimpleNamespace
+    from app import star_app
+    from app.services.demo_worker_supervisor import demo_worker_supervisor
+
+    class FakeDB:
+        def close(self):
+            pass
+
+    async def payload(_request):
+        return {"reason": "test_stop_timeout", "close_positions": False}
+
+    emergency = []
+    monkeypatch.setattr(star_app, "db_sess", FakeDB)
+    monkeypatch.setattr(star_app, "require_user", lambda request, db: (SimpleNamespace(email="owner@example.com"), None))
+    monkeypatch.setattr(star_app, "body", payload)
+    monkeypatch.setattr(star_app.core_service, "stop_bot", lambda *args, **kwargs: {
+        "ok": True, "state": {"bot_run_state": "stopped"},
+    })
+    monkeypatch.setattr(star_app.core_service, "set_state", lambda db, **kwargs: (
+        emergency.append(kwargs) or {"bot_run_state": "stopped", "emergency_stop": True}
+    ))
+    monkeypatch.setattr(demo_worker_supervisor, "stop", lambda **kwargs: {
+        "ok": False, "stopped": False, "error": "trading_worker_stop_timeout",
+    })
+
+    response = asyncio.run(star_app.master_stop(SimpleNamespace()))
+    data = json.loads(response.body.decode("utf-8"))
+    assert response.status_code == 503
+    assert data["emergency_stop_latched"] is True
+    assert data["state"]["emergency_stop"] is True
+    assert emergency == [{"emergency_stop": True}]
+
+
+def test_binance_preflight_reports_supervisor_availability_without_claiming_worker_running(monkeypatch):
+    from types import SimpleNamespace
+    from app import star_app
+    from app.services.binance_execution import binance_execution_service
+    from app.services.demo_worker_supervisor import demo_worker_supervisor
+
+    class FakeDB:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(star_app, "db_sess", FakeDB)
+    monkeypatch.setattr(star_app, "require_user", lambda request, db: (SimpleNamespace(email="owner@example.com"), None))
+    monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {
+        "ok": True, "ready": True, "account_target": "testnet", "market": "spot",
+        "orders_submitted": False,
+    })
+    monkeypatch.setattr(demo_worker_supervisor, "status", lambda: {
+        "running": False, "thread_name": None, "account_target": None, "market": None,
+    })
+
+    response = asyncio.run(star_app.binance_execution_preflight(SimpleNamespace()))
+    data = json.loads(response.body.decode("utf-8"))
+    assert response.status_code == 200
+    assert data["ready"] is True
+    assert data["worker_available"] is True
+    assert data["worker_running"] is False
+    assert data["orders_submitted"] is False
