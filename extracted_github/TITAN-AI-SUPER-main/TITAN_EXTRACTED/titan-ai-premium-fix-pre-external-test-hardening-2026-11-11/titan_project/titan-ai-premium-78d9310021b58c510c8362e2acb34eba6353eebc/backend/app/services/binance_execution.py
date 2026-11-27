@@ -319,11 +319,22 @@ class BinanceExecutionService:
             db.commit()
             db.refresh(record)
 
-            result = adapter.place_order(
-                symbol=symbol, side=side, order_type=order_type, quantity=qty,
-                price=px, leverage=lev, reduce_only=bool(reduce_only),
-                idempotency_key=key,
-            )
+            try:
+                result = adapter.place_order(
+                    symbol=symbol, side=side, order_type=order_type, quantity=qty,
+                    price=px, leverage=lev, reduce_only=bool(reduce_only),
+                    idempotency_key=key,
+                )
+            except Exception as submit_exc:
+                # The adapter may raise after the HTTP request was written.
+                # Route this through the same read-only client-ID reconciliation
+                # path instead of assuming the exchange rejected the order.
+                result = {
+                    "ok": False,
+                    "sent_to_exchange": False,
+                    "submission_exception": True,
+                    "error": f"submission_exception_after_durable_record:{type(submit_exc).__name__}:{submit_exc}"[:300],
+                }
             if result.get("sent_to_exchange"):
                 exchange = result.get("response") if isinstance(result.get("response"), dict) else {}
                 exchange_status = str(exchange.get("status", "unknown")).lower()
@@ -395,7 +406,7 @@ class BinanceExecutionService:
             # A transport/HTTP error may mean Binance accepted the order but the
             # response was lost. Persist UNKNOWN and latch emergency stop; never retry.
             error = str(result.get("error") or result.get("reason") or "execution_rejected")
-            uncertain = any(token in error.lower() for token in (
+            uncertain = result.get("submission_exception") is True or any(token in error.lower() for token in (
                 "timeout", "timed out", "urlopen", "connection", "http_error",
                 "remote end", "incomplete read",
             ))
