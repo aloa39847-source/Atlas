@@ -118,8 +118,15 @@ class BinanceExecutionService:
             return {"ok": False, "sent_to_exchange": False, "error": "system_state_missing"}
         target = str(getattr(state, "account_target", "demo") or "demo").lower()
         market = str(state.market_type or "spot")
-        if target not in {"testnet", "live"}:
-            return {"ok": False, "sent_to_exchange": False, "error": "external_binance_account_required"}
+        if target == "live":
+            # This release is read-only for Live. Cancellation is still an
+            # exchange-side write and must remain disabled with order entry.
+            return {
+                "ok": False, "sent_to_exchange": False,
+                "error": "live_operations_disabled_by_server",
+            }
+        if target != "testnet":
+            return {"ok": False, "sent_to_exchange": False, "error": "testnet_account_required"}
         order = db.get(OrderRecord, int(local_order_id))
         if order is None or order.shadow:
             return {"ok": False, "sent_to_exchange": False, "error": "tracked_exchange_order_not_found"}
