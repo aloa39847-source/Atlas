@@ -3574,15 +3574,16 @@ async def binance_live_creds_status(request):
     try:
         state = core_service.get_state(db)
         configured = bool(creds.get("configured"))
-        server_live_enabled = bool(settings.live_trading_enabled)
+        server_live_enabled = False
         user_live_confirmed = bool(state.get("live_confirmed_by_user"))
         return J({
             "configured": configured, "market": market,
             "environment": "live", "has_secret": configured,
             "server_live_enabled": server_live_enabled,
             "user_live_confirmed": user_live_confirmed,
-            "live_start_required": not user_live_confirmed,
-            "live_blocked": not (configured and server_live_enabled and user_live_confirmed),
+            "live_start_required": False,
+            "live_execution_hard_disabled": True,
+            "live_blocked": True,
         })
     finally:
         db.close()
