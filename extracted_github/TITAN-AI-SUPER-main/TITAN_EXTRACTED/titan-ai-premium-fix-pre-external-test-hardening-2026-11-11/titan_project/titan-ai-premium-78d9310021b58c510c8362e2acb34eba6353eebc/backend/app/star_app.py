@@ -3160,6 +3160,22 @@ async def binance_testnet_status(request):
     except Exception as e:
         return J({"ok": False, "error": str(e)}, 400)
 
+async def binance_testnet_validate_trade_permission(request):
+    auth_error = _binance_auth_error(request)
+    if auth_error:
+        return auth_error
+    try:
+        payload = await body(request)
+        market = str(payload.get("market") or request.query_params.get("market") or "spot").strip().lower()
+        symbol = str(payload.get("symbol") or "BTCUSDT").strip().upper()
+        if market not in {"spot", "futures"}:
+            return J({"ok": False, "error": "unsupported_testnet_market", "order_submitted": False}, 400)
+        result = _get_binance_adapter(market).validate_testnet_trade_permission(symbol)
+        return J(result, 200 if result.get("ok") else 409)
+    except Exception as exc:
+        return J({"ok": False, "error": "testnet_trade_permission_validation_failed",
+                  "detail": str(exc)[:240], "order_submitted": False}, 503)
+
 async def binance_testnet_order(request):
     # Direct API-triggered orders bypass the supervised decision, position,
     # loss-limit, and durable execution lifecycle. Keep this legacy route
@@ -3279,8 +3295,7 @@ async def binance_testnet_save(request):
         if not api_key or not api_secret:
             return J({"ok": False, "error": "api_key_and_secret_required"}, 400)
 
-        # Verify the supplied credentials against the selected Testnet market BEFORE persisting.
-        # Literal refs are used only by this in-memory adapter instance.
+        # Verify credentials against the selected Testnet account before persisting.
         candidate = BinanceTestnetAdapter(BinanceConfig(
             enabled=True, environment='testnet', market=market,
             api_key_ref=api_key, api_secret_ref=api_secret,
@@ -3300,8 +3315,6 @@ async def binance_testnet_save(request):
                 # cannot switch account keys mid-cycle.
                 stopped = demo_worker_supervisor.stop(timeout=30.0)
                 if not stopped.get("ok"):
-                    # Latch the persisted emergency stop as a fail-closed signal
-                    # in case the worker is still alive after the stop timeout.
                     core_service.set_state(db, emergency_stop=True)
                     return J({"ok": False, "saved": False, "auto_started": False,
                               "worker": stopped, "test_status": status,
@@ -3310,45 +3323,15 @@ async def binance_testnet_save(request):
                 core_service.stop_bot(db, reason="switch_account_to_testnet")
             save_testnet_credentials(api_key, api_secret, market)
             core_service.set_state(db, account_target="testnet", market_type=market)
-            if not status.get("execution_ready"):
-                return J({
-                    "ok": True, "saved": True, "auto_started": False,
-                    "test_status": status,
-                    "note": (
-                        "Testnet account is authenticated, but account-level trading is disabled. The trading worker remains stopped."
-                        if status.get("account_can_trade") is False else
-                        "Testnet account is authenticated, but API-key TRADE permission is not verified by read-only checks. The trading worker remains stopped."
-                    ),
-                })
-            try:
-                prepared = core_service.start_bot(db, account_target="testnet")
-                started = demo_worker_supervisor.start(
-                    market=market, account_target="testnet", interval_seconds=60,
-                )
-                if not started.get("ok"):
-                    from app.models.entities import SystemState
-                    from datetime import datetime, timezone
-                    if demo_worker_supervisor.status().get("running"):
-                        core_service.set_state(db, emergency_stop=True)
-                    state_row = db.get(SystemState, 1)
-                    if state_row is not None:
-                        state_row.bot_run_state = "stopped"
-                        state_row.autonomous_enabled = False
-                        state_row.bot_stop_reason = started.get("error", "testnet_worker_start_failed")
-                        state_row.bot_stopped_at = datetime.now(timezone.utc)
-                        db.add(state_row)
-                        db.commit()
-                    return J({"ok": True, "saved": True, "auto_started": False,
-                              "worker": started, "test_status": status,
-                              "note": "Testnet credentials are stored securely, but the worker did not start. Resolve the reported preflight issue before trading."})
-                return J({"ok": True, "saved": True, "auto_started": True,
-                          "worker": started, "state": core_service.get_state(db),
-                          "test_status": status,
-                          "note": "Testnet credentials verified and encrypted. TITAN started the supervised Binance Testnet trading worker automatically for the selected market."})
-            except Exception as start_error:
-                return J({"ok": True, "saved": True, "auto_started": False,
-                          "error": str(start_error)[:240], "test_status": status,
-                          "note": "Testnet credentials were saved securely, but automatic trading did not start because preflight or safety checks did not pass."})
+            return J({
+                "ok": True, "saved": True, "auto_started": False,
+                "test_status": status,
+                "note": (
+                    "Testnet credentials are encrypted and the selected market is ready for permission validation. "
+                    "The worker remains stopped until TRADE scope is verified with the non-executing order/test endpoint "
+                    "and you explicitly start Testnet from the dashboard."
+                ),
+            })
         finally:
             db.close()
     except Exception as e:
@@ -3637,6 +3620,7 @@ routes = [
     Route("/api/binance/live/delete", binance_live_delete, methods=["POST"]),
     Route("/api/binance/execution/preflight", binance_execution_preflight),
     Route("/api/binance/testnet/status", binance_testnet_status),
+    Route("/api/binance/testnet/validate-trade-permission", binance_testnet_validate_trade_permission, methods=["POST"]),
     Route("/api/binance/testnet/futures/maintenance-brackets", binance_testnet_futures_maintenance_brackets),
     Route("/api/binance/testnet/creds", binance_testnet_creds_status),
     Route("/api/binance/testnet/save", binance_testnet_save, methods=["POST"]),

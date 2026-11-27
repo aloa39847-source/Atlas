@@ -127,7 +127,7 @@ def test_testnet_account_read_does_not_claim_api_key_trade_permission(monkeypatc
     assert status["trade_permission"] is None
     assert status["api_key_trade_permission_verified"] is None
     assert status["execution_ready"] is False
-    assert status["execution_readiness_check"] == "api_key_trade_permission_requires_explicit_test_order_validation"
+    assert status["execution_readiness_check"] == "api_key_trade_permission_requires_test_order_validation"
     assert calls == [("GET", "/api/v3/account", True)]
 
 def test_testnet_status_blocks_when_account_level_trading_is_disabled(monkeypatch):

@@ -156,3 +156,24 @@ test('bearer sessions are tab-scoped and legacy persistent tokens are cleared', 
   setToken('')
   assert.equal(sessionStorage.getItem('titan_token'), null)
 })
+
+
+test('Binance Testnet TRADE permission validation uses the dedicated no-order endpoint', async () => {
+  setToken('ci-token')
+  let captured
+  globalThis.fetch = async (url, options) => {
+    captured = { url, options }
+    return new Response(JSON.stringify({
+      ok: true, verified: true, order_submitted: false,
+      matching_engine_reached: false, market: 'futures', symbol: 'BTCUSDT',
+    }), { status: 200 })
+  }
+  const result = await api.binanceTestnetValidateTradePermission('futures', 'BTCUSDT')
+  assert.equal(result.verified, true)
+  assert.equal(result.order_submitted, false)
+  assert.equal(result.matching_engine_reached, false)
+  assert.equal(captured.url, '/api/binance/testnet/validate-trade-permission')
+  assert.equal(captured.options.method, 'POST')
+  assert.deepEqual(JSON.parse(captured.options.body), { market: 'futures', symbol: 'BTCUSDT' })
+  assert.equal(captured.options.headers.Authorization, 'Bearer ci-token')
+})
