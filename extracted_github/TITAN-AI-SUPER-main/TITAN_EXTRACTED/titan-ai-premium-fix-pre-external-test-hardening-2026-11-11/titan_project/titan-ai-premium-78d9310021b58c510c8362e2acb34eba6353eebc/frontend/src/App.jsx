@@ -177,7 +177,7 @@ export default function App() {
     e.preventDefault(); setBusy(true); setBinanceMsg('')
     try {
       const res = await api.binanceTestnetSave({api_key: binanceForm.api_key, api_secret: binanceForm.api_secret, market: binanceForm.market})
-      setBinanceMsg(res.ok ? 'تم الحفظ واختبار الاتصال' : ('خطأ: ' + (res.error||'')))
+      setBinanceMsg(res.ok ? 'تم حفظ المفاتيح والتحقق من الاتصال. افحص صلاحية TRADE قبل تشغيل العامل.' : ('خطأ: ' + (res.error||'')))
       setBinanceForm(f=>({...f, api_key:'', api_secret:''}))
       await refresh()
       setBinanceTestnet(res.test_status || await api.binanceTestnetStatus(binanceForm.market))
@@ -187,6 +187,18 @@ export default function App() {
     setBusy(true); setBinanceMsg('')
     try { const r = await api.binanceTestnetStatus(binanceForm.market); setBinanceTestnet(r); setBinanceMsg(r.connected ? 'الاتصال ناجح' : 'غير متصل - تحقق من المفاتيح') }
     catch(e2){ setBinanceMsg('خطأ: '+e2.message) } finally { setBusy(false) }
+  }
+  async function validateBinanceTradePermission() {
+    setBusy(true); setBinanceMsg('')
+    try {
+      const market = binanceOrderForm.market || binanceForm.market
+      const r = await api.binanceTestnetValidateTradePermission(market, 'BTCUSDT')
+      setBinanceMsg(r.ok
+        ? 'تم إثبات صلاحية TRADE عبر order/test. لم يُرسل أي أمر إلى محرك المطابقة.'
+        : 'تعذر إثبات صلاحية TRADE: ' + (r.error || 'تحقق من مفاتيح Testnet وصلاحياتها'))
+      await refresh()
+      setBinanceTestnet(await api.binanceTestnetStatus(market))
+    } catch(e2) { setBinanceMsg('خطأ: '+e2.message) } finally { setBusy(false) }
   }
   async function deleteBinance() {
     if(!confirm('حذف مفاتيح Testnet؟')) return
@@ -318,7 +330,7 @@ export default function App() {
 
     {error && <div className="error" style={{marginBottom:10}}>{error}</div>}
     <div className="notice" style={{marginBottom:10}}>
-      الأمان: عامل التشغيل التلقائي يعمل على Demo/Shadow فقط. Testnet للاتصال والفحص وقراءة الحساب والأوامر المفتوحة فقط؛ إرسال الأوامر اليدوية والآلية متوقف حالياً. Live محظور ولا تُقبل مفاتيحه. لا سحب أو تحويل.
+      الأمان: Demo/Shadow داخلي. Binance Testnet يتطلب إثبات TRADE عبر order/test غير المنفذ ثم تشغيل العامل المشرف يدوياً؛ لا يُرسل اختبار الصلاحية أمراً إلى محرك المطابقة. Live محظور بالكامل. لا سحب أو تحويل.
     </div>
 
     <div className="card" style={{marginBottom:10}}>
@@ -330,14 +342,14 @@ export default function App() {
         <span>طوارئ: <Pill status={status?.state?.emergency_stop?'bad':'good'}>{String(!!status?.state?.emergency_stop)}</Pill></span>
       </div>
       <div className="row">
-        <button onClick={()=>master('start')} disabled={busy || status?.state?.account_target !== 'demo' || ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>{status?.state?.account_target === 'testnet' ? 'التداول الآلي Testnet متوقف' : status?.state?.account_target === 'live' ? 'Live محظور' : 'تشغيل Demo/Shadow'}</button>
+        <button onClick={()=>master('start')} disabled={busy || !['demo','testnet'].includes(status?.state?.account_target) || (status?.state?.account_target === 'testnet' && !binanceTestnet?.execution_ready) || ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>{status?.state?.account_target === 'testnet' ? (binanceTestnet?.execution_ready ? 'تشغيل Binance Testnet' : 'أثبت صلاحية TRADE أولاً') : status?.state?.account_target === 'live' ? 'Live محظور' : 'تشغيل Demo/Shadow'}</button>
         <button className="secondary" onClick={()=>master('stop')} disabled={busy}>STOP BOT (إيقاف الجديد فقط)</button>
         <button className="secondary" onClick={()=>master('emergency')} disabled={busy} style={{borderColor:'#6a2a2a'}}>EMERGENCY STOP</button>
         <button className="secondary" onClick={resetEmergency} disabled={busy || !status?.state?.emergency_stop}>إعادة ضبط الطوارئ (بعد الفحص)</button>
         <button className="secondary" onClick={()=>setStatePatch({account_target:'demo'})} disabled={busy || ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>Demo</button>
         <button className="secondary" onClick={()=>setStatePatch({account_target:'testnet'})} disabled={busy || ['starting','running','analyzing','executing','waiting_data'].includes(status?.state?.bot_run_state)}>Testnet</button>
       </div>
-      <div className="muted" style={{marginTop:8}}>Start يشغّل Demo/Shadow الداخلي فقط. فحص Testnet وقراءة الحساب والأوامر المفتوحة فقط؛ لا إرسال أو إغلاق أوامر من TITAN حالياً. Live محظور بالكامل وفق سياسة المشروع.</div>
+      <div className="muted" style={{marginTop:8}}>Start يشغّل Demo/Shadow أو عامل Binance Testnet المشرف بعد نجاح فحص TRADE. Live محظور بالكامل وفق سياسة المشروع.</div>
       {binanceLive && <div className="notice" style={{marginTop:8}}>Live: محظور | لا تُقبل مفاتيح Live ولا تُرسل طلبات إلى حساب حقيقي.</div>}
       {binanceLiveCreds?.configured && <div className="notice" style={{marginTop:8}}>توجد مفاتيح Live قديمة محفوظة. لن تُستخدم، ويمكنك حذف مفاتيح Spot وFutures القديمة معاً.</div>}
       <button className="secondary" onClick={deleteLiveCredentials} disabled={busy}>حذف أي مفاتيح Live قديمة (Spot وFutures)</button>
@@ -375,7 +387,7 @@ export default function App() {
     
     {tab==='binance' && <div className="grid">
       <div className="card"><h3>ربط Binance Testnet (Spot وFutures تجريبي)</h3>
-        <div className="notice" style={{marginBottom:10}}>استعمل مفاتيح Testnet فقط. هذه الصفحة للاتصال والقراءة؛ لا إرسال أوامر يدوية أو آلية حالياً.</div>
+        <div className="notice" style={{marginBottom:10}}>استعمل مفاتيح Testnet فقط. فحص TRADE يستخدم Binance order/test ولا ينشئ أمراً ولا يصل إلى محرك المطابقة. التشغيل الفعلي يظل عبر العامل المشرف فقط.</div>
         <div>الحالة: <Pill status={binanceTestnet?.connected?'good':'warn'}>{binanceTestnet?.connected?'متصل':'غير متصل'}</Pill></div>
         <div>مهيأ: <Pill status={binanceCreds?.configured||binanceTestnet?.configured?'good':'warn'}>{String(binanceCreds?.configured||binanceTestnet?.configured)}</Pill></div>
         <div>السوق: {binanceTestnet?.market || binanceCreds?.market || '-'}</div>
@@ -396,13 +408,14 @@ export default function App() {
           <div className="row" style={{marginTop:10}}>
             <button disabled={busy}>حفظ وربط</button>
             <button type="button" className="secondary" onClick={testBinance} disabled={busy}>اختبار الاتصال</button>
+            <button type="button" className="secondary" onClick={validateBinanceTradePermission} disabled={busy || !(binanceCreds?.configured || binanceTestnet?.configured)}>إثبات TRADE بدون تنفيذ أمر</button>
             <button type="button" className="secondary" onClick={deleteBinance} disabled={busy}>حذف المفاتيح</button>
           </div>
         </form>
         <div className="muted" style={{marginTop:10}}>المفاتيح تُحفظ مشفرة على الخادم فقط. لا تُخزن في المتصفح ولا تظهر بعد الحفظ. لا تشاركها في المحادثة.</div>
       </div>
       <div className="card"><h3>قراءة Binance Testnet فقط</h3>
-        <div className="notice" style={{marginBottom:10}}>إرسال الأوامر وإغلاق المراكز متوقفان حالياً على الخادم. المتاح هنا قراءة الحساب والأوامر المفتوحة والمطابقة فقط؛ لا توجد صفقات تُرسل إلى Binance.</div>
+        <div className="notice" style={{marginBottom:10}}>التحقق من صلاحية TRADE لا يرسل أمراً إلى محرك المطابقة. أوامر Testnet الفعلية لا تمر إلا عبر العامل المشرف بعد نجاح الفحص وموافقة التشغيل من لوحة التحكم.</div>
         <label>السوق</label>
         <select value={binanceOrderForm.market} onChange={e=>setBinanceOrderForm({market:e.target.value})}>
           <option value="spot">Spot Testnet</option>
