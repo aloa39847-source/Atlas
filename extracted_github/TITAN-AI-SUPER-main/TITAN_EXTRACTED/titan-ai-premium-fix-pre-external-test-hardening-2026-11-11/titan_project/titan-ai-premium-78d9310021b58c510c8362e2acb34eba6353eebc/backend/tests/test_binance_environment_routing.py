@@ -492,3 +492,74 @@ def test_live_adapter_does_not_require_extra_server_or_geo_kyc_environment_flags
     monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
     monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
     assert adapter._execution_ready() is None
+
+
+def test_futures_hedge_mode_routes_open_and_close_orders_to_correct_position_leg(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda method, path, signed=False, params=None: {
+        "dualSidePosition": True,
+    })
+    cases = [
+        ("BUY", False, "LONG", {"positionSide": "LONG"}),
+        ("SELL", False, "SHORT", {"positionSide": "SHORT"}),
+        ("SELL", True, "LONG", {"positionSide": "LONG"}),
+        ("BUY", True, "SHORT", {"positionSide": "SHORT"}),
+    ]
+    for side, reduce_only, position_side, expected in cases:
+        result = adapter._futures_position_order_params(
+            side=side, reduce_only=reduce_only, position_side=position_side,
+        )
+        assert result == expected
+        assert "reduceOnly" not in result
+
+
+def test_futures_one_way_close_uses_reduce_only_without_position_side(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda method, path, signed=False, params=None: {
+        "dualSidePosition": False,
+    })
+    close_long = adapter._futures_position_order_params(
+        side="SELL", reduce_only=True, position_side="LONG",
+    )
+    close_short = adapter._futures_position_order_params(
+        side="BUY", reduce_only=True, position_side="SHORT",
+    )
+    open_long = adapter._futures_position_order_params(
+        side="BUY", reduce_only=False, position_side="LONG",
+    )
+    assert close_long == {"reduceOnly": "true"}
+    assert close_short == {"reduceOnly": "true"}
+    assert open_long == {}
+    assert "positionSide" not in close_long
+
+
+def test_futures_position_mode_lookup_failure_blocks_order_parameter_generation(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: {
+        "error": "signed_request_failed", "status": 401,
+    })
+    result = adapter._futures_position_order_params(
+        side="SELL", reduce_only=True, position_side="LONG",
+    )
+    assert result["error"] == "futures_position_mode_unavailable"
+
+
+def test_futures_position_side_and_order_direction_must_match(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: {
+        "dualSidePosition": True,
+    })
+    result = adapter._futures_position_order_params(
+        side="BUY", reduce_only=True, position_side="LONG",
+    )
+    assert result["error"] == "futures_order_side_position_side_mismatch"
+    assert result["position_side"] == "LONG"
+    assert result["expected_order_side"] == "SELL"
