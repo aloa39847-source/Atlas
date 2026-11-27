@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.integrations.binance_adapter import BinanceConfig, BinanceTestnetAdapter, BinanceLiveAdapter
-from app.models.entities import OrderRecord, SystemState
+from app.models.entities import OrderRecord, PositionRecord, SystemState
 from app.services.credentials import load_binance_credentials, load_testnet_credentials
 from app.services.audit import log_event
 
@@ -231,7 +231,10 @@ class BinanceExecutionService:
                 "status": existing.status,
             }
 
-        is_position_exit = bool(reduce_only) or (order_metadata or {}).get("intent") == "close"
+        if order_metadata is not None and not isinstance(order_metadata, dict):
+            return {"ok": False, "sent_to_exchange": False, "error": "order_metadata_must_be_object"}
+        intent = str((order_metadata or {}).get("intent") or "").strip().lower()
+        is_position_exit = bool(reduce_only) or intent == "close"
         if state.bot_run_state not in {"running", "analyzing", "executing"} and not is_position_exit:
             return {"ok": False, "sent_to_exchange": False, "error": "master_worker_not_running"}
         if state.emergency_stop and not is_position_exit:
@@ -246,11 +249,59 @@ class BinanceExecutionService:
                 or (px is not None and (not math.isfinite(px) or px <= 0))):
             return {"ok": False, "sent_to_exchange": False, "error": "invalid_order_numeric_input"}
 
-        if order_metadata is not None and not isinstance(order_metadata, dict):
-            return {"ok": False, "sent_to_exchange": False, "error": "order_metadata_must_be_object"}
-
         if bool((state.risk_limits or {}).get("trading_paused", False)) and not is_position_exit:
             return {"ok": False, "sent_to_exchange": False, "error": "new_trade_entries_paused"}
+
+        # Resolve Futures position ownership before creating a durable order.
+        # In Hedge Mode the exchange requires the exact LONG/SHORT leg; guessing
+        # from BUY/SELL alone can close the opposite exposure.
+        futures_position_side: str | None = None
+        if market == "futures":
+            normalized_order_side = str(side or "").strip().upper()
+            if normalized_order_side not in {"BUY", "SELL"}:
+                return {"ok": False, "sent_to_exchange": False, "error": "invalid_futures_order_side"}
+            if intent == "close":
+                if not reduce_only:
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_position_close_requires_reduce_only"}
+                raw_position_id = (order_metadata or {}).get("position_id")
+                if isinstance(raw_position_id, bool) or raw_position_id is None:
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_position_id_required_for_close"}
+                try:
+                    position_id = int(raw_position_id)
+                except (TypeError, ValueError, OverflowError):
+                    return {"ok": False, "sent_to_exchange": False, "error": "invalid_futures_position_id"}
+                position = db.get(PositionRecord, position_id)
+                if (
+                    position is None
+                    or position.shadow is not False
+                    or position.status != "open"
+                    or position.environment_mode != target
+                    or position.market_type != "futures"
+                    or not math.isfinite(float(position.quantity or 0))
+                    or float(position.quantity or 0) <= 0
+                ):
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_position_not_open_or_environment_mismatch"}
+                if position.side == "long":
+                    futures_position_side = "LONG"
+                elif position.side == "short":
+                    futures_position_side = "SHORT"
+                else:
+                    return {"ok": False, "sent_to_exchange": False, "error": "unsupported_futures_position_side"}
+                expected_close_side = "SELL" if futures_position_side == "LONG" else "BUY"
+                if normalized_order_side != expected_close_side:
+                    return {
+                        "ok": False, "sent_to_exchange": False,
+                        "error": "futures_close_order_side_position_mismatch",
+                        "position_side": futures_position_side,
+                        "expected_order_side": expected_close_side,
+                    }
+            elif reduce_only:
+                # Explicit reduce-only callers without a position record may
+                # still close a net position in One-way Mode. Hedge Mode will
+                # only accept this inferred leg if the caller's direction agrees.
+                futures_position_side = "LONG" if normalized_order_side == "SELL" else "SHORT"
+            else:
+                futures_position_side = "LONG" if normalized_order_side == "BUY" else "SHORT"
 
         # Enforce the configured notional cap at the final execution boundary.
         # Position-reducing exits are exempt so safety controls never block a close.
@@ -320,6 +371,7 @@ class BinanceExecutionService:
                     **(order_metadata or {}),
                     "account_target": target, "leverage": lev,
                     "reduce_only": bool(reduce_only),
+                    **({"futures_position_side": futures_position_side} if futures_position_side else {}),
                 },
             )
             db.add(record)
@@ -330,7 +382,7 @@ class BinanceExecutionService:
                 result = adapter.place_order(
                     symbol=symbol, side=side, order_type=order_type, quantity=qty,
                     price=px, leverage=lev, reduce_only=bool(reduce_only),
-                    idempotency_key=key,
+                    idempotency_key=key, position_side=futures_position_side,
                 )
             except Exception as submit_exc:
                 # The adapter may raise after the HTTP request was written.
