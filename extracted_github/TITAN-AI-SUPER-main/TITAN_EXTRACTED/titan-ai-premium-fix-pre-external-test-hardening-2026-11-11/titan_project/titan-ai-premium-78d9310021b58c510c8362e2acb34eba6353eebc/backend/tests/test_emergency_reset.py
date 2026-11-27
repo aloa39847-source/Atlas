@@ -135,3 +135,30 @@ def test_futures_emergency_reset_blocks_open_positions(tmp_path, monkeypatch):
     finally:
         db.close()
         engine.dispose()
+
+
+def test_emergency_reset_refuses_while_supervisor_thread_is_still_running(tmp_path, monkeypatch):
+    db, engine = _db(tmp_path)
+    try:
+        state = db.get(SystemState, 1)
+        state.emergency_stop = True
+        state.bot_run_state = "stopped"
+        db.add(state)
+        db.commit()
+        monkeypatch.setattr(
+            "app.services.demo_worker_supervisor.demo_worker_supervisor.status",
+            lambda: {"running": True, "account_target": "testnet", "market": "spot"},
+        )
+        monkeypatch.setattr(
+            core_service.market_data, "get_public_multi_timeframe",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("fresh market data must not be queried while the worker thread is alive")
+            ),
+        )
+        with pytest.raises(ValueError, match="worker_must_be_stopped_before_emergency_reset"):
+            core_service.reset_emergency_stop(db)
+        assert db.get(SystemState, 1).emergency_stop is True
+        assert db.get(SystemState, 1).bot_run_state == "stopped"
+    finally:
+        db.close()
+        engine.dispose()
