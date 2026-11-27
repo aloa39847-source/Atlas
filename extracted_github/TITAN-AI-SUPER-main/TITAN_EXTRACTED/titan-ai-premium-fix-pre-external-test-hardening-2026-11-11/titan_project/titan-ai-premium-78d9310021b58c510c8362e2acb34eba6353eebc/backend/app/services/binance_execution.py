@@ -589,7 +589,8 @@ class BinanceExecutionService:
                     "ok": False, "sent_to_exchange": None,
                     "outcome_uncertain": True,
                     "reconciled_after_uncertain_submit": False,
-                    "error": error,
+                    "error": "binance_execution_outcome_uncertain",
+                    "submission_error": error[:300],
                     "order_id": record.id, "status": record.status,
                     "execution": result,
                 }
