@@ -2772,10 +2772,16 @@ async def master_stop(request):
             close_positions=close_positions,
         )
         from app.services.demo_worker_supervisor import demo_worker_supervisor
-        stopped = demo_worker_supervisor.stop()
+        stopped = demo_worker_supervisor.stop(timeout=30.0)
         if not stopped.get("ok"):
+            # The persisted stop flag blocks new entries, but a timed-out thread
+            # may still be inside an exchange request. Latch the independent
+            # emergency flag until the worker is confirmed stopped and state is
+            # reconciled.
+            emergency_state = core_service.set_state(db, emergency_stop=True)
             return J({"ok": False, "error": "demo_worker_stop_failed",
-                      "worker": stopped, "state": core_service.get_state(db)}, 503)
+                      "emergency_stop_latched": True,
+                      "worker": stopped, "state": emergency_state}, 503)
         return J({**result, "worker": stopped})
     except Exception as e:
         db.rollback()
@@ -3089,9 +3095,17 @@ async def binance_execution_preflight(request):
             return err
         from app.services.binance_execution import binance_execution_service
         result = binance_execution_service.preflight(db, live_worker_ready=False)
-        result["worker_available"] = False
+        from app.services.demo_worker_supervisor import demo_worker_supervisor
+        worker_status = demo_worker_supervisor.status()
+        result["worker_available"] = True
+        result["worker_running"] = bool(worker_status.get("running"))
+        result["worker_status"] = worker_status
         result["orders_submitted"] = False
-        result["note"] = "Read-only readiness inspection. No order is submitted. Worker readiness remains false until the supervised execution loop and protection/reconciliation lifecycle are connected."
+        result["note"] = (
+            "Read-only readiness inspection; no order is submitted. When Testnet preflight is ready, "
+            "the separate dashboard Start action starts the supervised worker, which repeats account, "
+            "risk, order and reconciliation checks before any submission."
+        )
         return J(result, 200 if result.get("ok") else 409)
     except Exception as exc:
         return J({"ok": False, "error": "binance_execution_preflight_failed", "detail": str(exc)[:240]}, 503)
@@ -3337,16 +3351,59 @@ async def binance_testnet_save(request):
     except Exception as e:
         return J({"ok": False, "saved": False, "error": str(e)}, 400)
 
+def _stop_worker_before_credential_deletion(db, target: str, market: str | None, reason: str) -> dict[str, Any]:
+    """Stop the owning account worker before removing credentials it may still use."""
+    from app.services.demo_worker_supervisor import demo_worker_supervisor
+
+    current = core_service.get_state(db)
+    worker = demo_worker_supervisor.status()
+    active_states = {"starting", "running", "analyzing", "executing", "waiting_data"}
+    state_matches = (
+        str(current.get("account_target") or "demo").lower() == target
+        and (market is None or str(current.get("market_type") or "spot").lower() == market)
+        and str(current.get("bot_run_state") or "stopped").lower() in active_states
+    )
+    worker_matches = (
+        worker.get("running") is True
+        and str(worker.get("account_target") or "").lower() == target
+        and (market is None or str(worker.get("market") or "").lower() == market)
+    )
+    if not state_matches and not worker_matches:
+        return {"ok": True, "stopped": False, "note": "No matching account worker was active."}
+
+    stopped = demo_worker_supervisor.stop(timeout=30.0)
+    if not stopped.get("ok"):
+        emergency_state = core_service.set_state(db, emergency_stop=True)
+        return {
+            "ok": False, "stopped": False, "worker": stopped,
+            "state": emergency_state,
+            "error": "account_worker_did_not_stop_credentials_retained",
+        }
+    core_service.stop_bot(db, reason=reason)
+    return {"ok": True, "stopped": True, "worker": stopped}
+
+
 async def binance_testnet_delete(request):
     auth_error = _binance_auth_error(request)
     if auth_error:
         return auth_error
+    market = request.query_params.get("market")
+    if market is not None and market not in {"spot", "futures"}:
+        return J({"ok": False, "error": "market_must_be_spot_or_futures"}, 400)
+    db = db_sess()
     try:
-        market = request.query_params.get("market")
-        res = delete_testnet_credentials(market if market in {"spot", "futures"} else None)
-        return J(res)
+        worker_stop = _stop_worker_before_credential_deletion(
+            db, "testnet", market, "delete_testnet_credentials",
+        )
+        if not worker_stop.get("ok"):
+            return J({**worker_stop, "deleted": False}, 503)
+        result = delete_testnet_credentials(market)
+        return J({**result, "worker": worker_stop})
     except Exception as e:
-        return J({"ok": False, "error": str(e)}, 400)
+        db.rollback()
+        return J({"ok": False, "error": str(e)[:240]}, 400)
+    finally:
+        db.close()
 
 async def binance_testnet_creds_status(request):
     auth_error = _binance_auth_error(request)
@@ -3470,7 +3527,20 @@ async def binance_live_delete(request):
     market = request.query_params.get("market")
     if market not in {"spot", "futures"}:
         return J({"ok": False, "error": "market_must_be_spot_or_futures"}, 400)
-    return J(delete_live_credentials(market))
+    db = db_sess()
+    try:
+        worker_stop = _stop_worker_before_credential_deletion(
+            db, "live", market, "delete_live_credentials",
+        )
+        if not worker_stop.get("ok"):
+            return J({**worker_stop, "deleted": False}, 503)
+        result = delete_live_credentials(market)
+        return J({**result, "worker": worker_stop})
+    except Exception as exc:
+        db.rollback()
+        return J({"ok": False, "error": str(exc)[:240]}, 400)
+    finally:
+        db.close()
 
 
 async def engines_list_detailed(request: Request):
