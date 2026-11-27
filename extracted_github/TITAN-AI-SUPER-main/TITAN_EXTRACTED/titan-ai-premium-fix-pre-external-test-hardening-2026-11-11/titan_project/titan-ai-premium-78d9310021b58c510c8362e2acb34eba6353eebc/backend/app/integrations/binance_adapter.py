@@ -1,6 +1,6 @@
-"""Environment-isolated Binance execution adapter for Spot and USD-M Futures.
-Live execution is fail-closed: server setting + explicit persisted user confirmation
-+ environment-specific credentials + read-only permission checks are required.
+"""Environment-isolated Binance adapter for Spot and USD-M Futures.
+Binance Live order execution is hard-disabled in this release; Live credentials
+may be used only for read-only monitoring. Testnet execution remains supervised.
 """
 from __future__ import annotations
 
@@ -997,14 +997,14 @@ class BinanceTestnetAdapter:
         return {"mode": "shadow", "sent_to_exchange": False, "precheck": pre}
 
     def place_order_live(self, **kwargs) -> dict[str, Any]:
-        """Explicit Live execution entrypoint; still guarded by config and user confirmation."""
+        """Legacy Live entrypoint retained only as a fail-closed compatibility guard."""
         if self.config.environment != "live":
             return {"ok": False, "sent_to_exchange": False, "error": "live_adapter_environment_required"}
         return self.place_order(**kwargs)
 
 
 class BinanceLiveAdapter(BinanceTestnetAdapter):
-    """Explicit Live adapter type; cannot be instantiated with Testnet settings."""
+    """Legacy Live adapter type; read-only monitoring only in this release."""
     name = "binance_live"
 
     def __init__(self, config: BinanceConfig | None = None):
