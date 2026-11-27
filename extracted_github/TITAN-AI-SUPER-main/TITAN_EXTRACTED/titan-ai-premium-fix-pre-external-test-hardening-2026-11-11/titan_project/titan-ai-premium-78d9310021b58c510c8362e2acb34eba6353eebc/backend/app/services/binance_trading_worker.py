@@ -572,6 +572,10 @@ def _sync_pending_orders(db, adapter, target: str, market: str) -> dict[str, Any
             if raw_quote in (None, ""):
                 raw_quote = response.get("cumQuote")
             cumulative_quote = float(raw_quote) if raw_quote not in (None, "") else None
+            if average <= 0 and executed > 0 and cumulative_quote is not None and cumulative_quote > 0:
+                # Spot GET /api/v3/order provides cummulativeQuoteQty but does
+                # not guarantee an avgPrice field. Derive the weighted average.
+                average = cumulative_quote / executed
             if cumulative_quote is None and executed > 0 and average > 0:
                 cumulative_quote = executed * average
         except (TypeError, ValueError, OverflowError):
