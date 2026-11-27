@@ -389,11 +389,14 @@ class BinanceExecutionService:
             db.refresh(record)
 
             try:
-                result = adapter.place_order(
-                    symbol=symbol, side=side, order_type=order_type, quantity=qty,
-                    price=px, leverage=lev, reduce_only=bool(reduce_only),
-                    idempotency_key=key, position_side=futures_position_side,
-                )
+                adapter_order_kwargs = {
+                    "symbol": symbol, "side": side, "order_type": order_type,
+                    "quantity": qty, "price": px, "leverage": lev,
+                    "reduce_only": bool(reduce_only), "idempotency_key": key,
+                }
+                if market == "futures":
+                    adapter_order_kwargs["position_side"] = futures_position_side
+                result = adapter.place_order(**adapter_order_kwargs)
             except Exception as submit_exc:
                 # The adapter may raise after the HTTP request was written.
                 # Route this through the same read-only client-ID reconciliation
