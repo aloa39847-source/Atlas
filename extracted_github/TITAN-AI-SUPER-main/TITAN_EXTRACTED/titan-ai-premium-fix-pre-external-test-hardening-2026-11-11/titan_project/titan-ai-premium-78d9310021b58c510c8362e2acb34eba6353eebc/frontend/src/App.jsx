@@ -104,10 +104,12 @@ export default function App() {
       }
       try { setAiResearch(await api.aiResearch()) } catch {}
       try { const ed = await api.enginesDetailed(); setEnginesDetailed(ed.engines || []) } catch {}
-      try { setBinanceTestnet(await api.binanceTestnetStatus(s?.state?.market_type || 'spot')) } catch {}
+      const selectedBinanceMarket = s?.state?.market_type || 'spot'
+      setBinanceForm(f => ({ ...f, market: selectedBinanceMarket }))
+      try { setBinanceTestnet(await api.binanceTestnetStatus(selectedBinanceMarket)) } catch {}
       try { setBinanceLive(await api.binanceLiveStatus(s?.state?.market_type || 'spot')) } catch {}
       try { setBinanceLiveCreds(await api.binanceLiveCreds(s?.state?.market_type || 'spot')) } catch {}
-      try { setBinanceCreds(await api.binanceTestnetCreds()) } catch {}
+      try { setBinanceCreds(await api.binanceTestnetCredsStatus(selectedBinanceMarket)) } catch {}
       try { const ap = await api.aiProviders(); setAiProviders(ap.items || []) } catch {}
       try { await refreshPortfolio(s?.state?.market_type, s?.state?.environment_mode) } catch {}
     } catch (e) { setError(`تعذر الاتصال بالخلفية أو حدث خطأ: ${e.message}. تأكد من تشغيل TITAN backend وأن /api متاح.`) }
@@ -408,7 +410,7 @@ export default function App() {
           <div className="row" style={{marginTop:10}}>
             <button disabled={busy}>حفظ وربط</button>
             <button type="button" className="secondary" onClick={testBinance} disabled={busy}>اختبار الاتصال</button>
-            <button type="button" className="secondary" onClick={validateBinanceTradePermission} disabled={busy || !(binanceCreds?.configured || binanceTestnet?.configured)}>إثبات TRADE بدون تنفيذ أمر</button>
+            <button type="button" className="secondary" onClick={validateBinanceTradePermission} disabled={busy}>إثبات TRADE بدون تنفيذ أمر</button>
             <button type="button" className="secondary" onClick={deleteBinance} disabled={busy}>حذف المفاتيح</button>
           </div>
         </form>
