@@ -113,6 +113,7 @@ export const api = {
   complianceCheck: (payload) => req('/api/compliance/check-order', { method: 'POST', body: JSON.stringify(payload) }),
   enginesDetailed: () => req('/api/engines/detailed'),
   binanceTestnetStatus: (market) => req(`/api/binance/testnet/status${market ? `?market=${market}` : ''}`),
+  binanceTestnetValidateTradePermission: (market, symbol='BTCUSDT') => req('/api/binance/testnet/validate-trade-permission', { method: 'POST', body: JSON.stringify({ market, symbol }) }),
   binanceTestnetFuturesMaintenanceBrackets: (symbol) => req(`/api/binance/testnet/futures/maintenance-brackets?symbol=${encodeURIComponent(symbol)}`),
   binanceLiveStatus: (market) => req(`/api/binance/live/status${market ? `?market=${market}` : ''}`),
   binanceExecutionPreflight: () => req('/api/binance/execution/preflight'),
