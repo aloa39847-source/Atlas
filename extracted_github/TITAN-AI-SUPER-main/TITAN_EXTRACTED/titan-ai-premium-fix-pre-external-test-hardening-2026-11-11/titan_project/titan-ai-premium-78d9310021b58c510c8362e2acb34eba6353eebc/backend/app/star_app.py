@@ -155,7 +155,7 @@ async def system_status(request: Request):
                 "ai_providers": provider_status(db),
             },
             "demo_worker": __import__("app.services.demo_worker_supervisor", fromlist=["demo_worker_supervisor"]).demo_worker_supervisor.status(),
-            "data_policy": {"live_market_data": False, "synthetic_labeled_available": True, "binance_public_available": True, "note": "Distinguish public read-only market data, automatic Binance Testnet execution, and Live read-only monitoring until server enablement plus explicit per-start user approval."},
+            "data_policy": {"live_market_data": False, "synthetic_labeled_available": True, "binance_public_available": True, "note": "Distinguish public read-only market data, supervised Binance Testnet execution, and Live read-only monitoring; Live order execution is hard-disabled in this release."},
         })
     finally:
         db.close()
@@ -3128,12 +3128,11 @@ async def binance_live_status(request):
             "live_blocked": not bool(status.get("execution_ready")),
             "server_live_enabled": bool(settings.live_trading_enabled),
             "user_live_confirmed": bool(state.get("live_confirmed_by_user")),
-            "live_start_required": not bool(state.get("live_confirmed_by_user")),
+            "live_start_required": False,
+            "live_execution_hard_disabled": True,
             "selected_account": state.get("account_target"),
             "orders_submitted": False,
-            "note": ("Live account is connected for read-only monitoring. Start Live explicitly in TITAN before any order can be sent."
-                     if not state.get("live_confirmed_by_user") else
-                     "Live execution requires the supervised worker, verified API permissions, and all risk checks."),
+            "note": ("Live account is connected for read-only monitoring only. Live order execution is hard-disabled in this release."),
         })
     except Exception as exc:
         return J({"ok": False, "error": str(exc)}, 400)
@@ -3555,7 +3554,7 @@ async def binance_live_save(request):
                       "worker": observer, "live_status": status,
                       "state": core_service.get_state(db),
                       "live_trading_started": False,
-                      "note": ("Live account connected. TITAN is now reading the account and analyzing the market in read-only mode. No real order will be sent until you explicitly start Live trading."
+                      "note": ("Live account connected. TITAN is reading the account and analyzing the market in read-only mode. Live order execution is hard-disabled in this release."
                                if observer.get("ok") else
                                "Live credentials are saved, but the read-only analysis worker did not start. The bot remains stopped; inspect the worker error before retrying.")})
         finally:
