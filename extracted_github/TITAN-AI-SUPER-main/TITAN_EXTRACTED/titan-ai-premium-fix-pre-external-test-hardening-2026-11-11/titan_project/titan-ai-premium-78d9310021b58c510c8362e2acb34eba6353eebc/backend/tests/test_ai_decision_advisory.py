@@ -228,3 +228,28 @@ def test_invalid_advisory_payload_is_reported_as_unavailable(monkeypatch):
     assert result["status"] == "unavailable"
     assert result["error"] == "advisory_evaluation_returned_invalid_payload"
     assert result["decision_modified"] is False
+
+
+def test_advisory_failure_rolls_back_only_the_failed_provider_session(monkeypatch):
+    from app.integrations import ai_providers
+    from app.services.core_service import _evaluate_decision_advisory_safely
+
+    class FailedProviderSession:
+        def __init__(self):
+            self.rollback_calls = 0
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+    session = FailedProviderSession()
+    def fail_after_provider_usage_write(db, context):
+        # Simulate an exception after an optional provider/audit write failed.
+        raise RuntimeError("simulated provider usage transaction failure")
+
+    monkeypatch.setattr(ai_providers, "evaluate_decision_advisory", fail_after_provider_usage_write)
+    result = _evaluate_decision_advisory_safely(session, {"symbol": "BTCUSDT"})
+
+    assert result["status"] == "unavailable"
+    assert result["decision_modified"] is False
+    assert result["action_authority"] == "none"
+    assert session.rollback_calls == 1
