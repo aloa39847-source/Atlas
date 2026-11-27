@@ -93,7 +93,6 @@ export default function TerminalDashboard() {
       const e = ['testnet','live'].includes(target) ? target : (s?.state?.environment_mode || 'demo')
       setMarket(m)
       setSelectedTarget(target)
-      setLiveApproval(s?.state?.live_confirmed_by_user===true)
       try { setPortfolio(await api.portfolio(e,m)) } catch { setPortfolio(null) }
     } catch (e) { setMessage('تعذر الاتصال بخادم TITAN: '+e.message) }
   },[market])
@@ -445,7 +444,6 @@ export default function TerminalDashboard() {
       await api.setState({account_target:selectedTarget, market_type:market})
       await refreshSystem()
       await refreshAccountHealth()
-      setLiveApproval(false)
       setMessage(selectedTarget==='demo'
         ? 'تم اختيار Demo الداخلي.'
         : selectedTarget==='testnet'
@@ -530,7 +528,7 @@ export default function TerminalDashboard() {
       if(action==='emergency') { await api.emergencyStop() }
       await refreshSystem()
       setMessage(action==='start'
-        ? selectedTarget==='demo'?'تم تشغيل Demo/Shadow الداخلي.':selectedTarget==='testnet'?'تم تشغيل تداول Binance Testnet التجريبي.':'تم إرسال أمر بدء التداول الحقيقي بعد موافقتك.'
+        ? selectedTarget==='demo'?'تم تشغيل Demo/Shadow الداخلي.':selectedTarget==='testnet'?'تم تشغيل تداول Binance Testnet التجريبي.':'Live معطل في هذا الإصدار.'
         :'تم تنفيذ طلب الإيقاف.')
       await refreshAccountHealth()
     } catch(e) {setMessage('فشل الإجراء: '+e.message)} finally {setBusy(false)}
