@@ -3125,7 +3125,7 @@ async def binance_live_status(request):
         state = core_service.get_state(db)
         return J({
             **status,
-            "live_blocked": not bool(status.get("execution_ready")),
+            "live_blocked": True,
             "server_live_enabled": False,
             "user_live_confirmed": bool(state.get("live_confirmed_by_user")),
             "live_start_required": False,
