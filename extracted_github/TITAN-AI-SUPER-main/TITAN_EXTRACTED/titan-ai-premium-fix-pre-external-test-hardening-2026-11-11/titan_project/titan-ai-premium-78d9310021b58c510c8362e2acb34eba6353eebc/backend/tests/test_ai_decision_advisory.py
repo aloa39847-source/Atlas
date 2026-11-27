@@ -175,3 +175,56 @@ def test_local_fallback_is_not_attempted_until_runtime_and_model_are_ready(monke
     assert result["status"] == "unavailable"
     assert result["local_runtime_ready"] is False
     assert result["advice_count"] == 0
+
+
+def test_advisory_failure_does_not_escape_into_deterministic_market_analysis(monkeypatch):
+    from app.integrations import ai_providers
+    from app.services.core_service import _evaluate_decision_advisory_safely
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("provider transport failed")
+
+    monkeypatch.setattr(ai_providers, "evaluate_decision_advisory", fail)
+    result = _evaluate_decision_advisory_safely(object(), {"symbol": "BTCUSDT"})
+
+    assert result["status"] == "unavailable"
+    assert result["error"] == "advisory_evaluation_failed"
+    assert result["error_type"] == "RuntimeError"
+    assert result["decision_modified"] is False
+    assert result["action_authority"] == "none"
+    assert result["final_decision_owner"] == "TITAN"
+    assert result["risk_veto_owner"] == "independent_risk_manager"
+    assert "provider transport failed" not in str(result)
+
+
+def test_advisory_payload_cannot_claim_decision_authority(monkeypatch):
+    from app.integrations import ai_providers
+    from app.services.core_service import _evaluate_decision_advisory_safely
+
+    monkeypatch.setattr(ai_providers, "evaluate_decision_advisory", lambda *args, **kwargs: {
+        "status": "completed",
+        "advisors": [{"provider": "fixture", "status": "completed"}],
+        "decision_modified": True,
+        "action_authority": "buy_sell",
+        "final_decision_owner": "external_provider",
+        "risk_veto_owner": "external_provider",
+    })
+    result = _evaluate_decision_advisory_safely(object(), {"symbol": "BTCUSDT"})
+
+    assert result["status"] == "completed"
+    assert result["decision_modified"] is False
+    assert result["action_authority"] == "none"
+    assert result["final_decision_owner"] == "TITAN"
+    assert result["risk_veto_owner"] == "independent_risk_manager"
+
+
+def test_invalid_advisory_payload_is_reported_as_unavailable(monkeypatch):
+    from app.integrations import ai_providers
+    from app.services.core_service import _evaluate_decision_advisory_safely
+
+    monkeypatch.setattr(ai_providers, "evaluate_decision_advisory", lambda *args, **kwargs: ["not", "a", "report"])
+    result = _evaluate_decision_advisory_safely(object(), {"symbol": "BTCUSDT"})
+
+    assert result["status"] == "unavailable"
+    assert result["error"] == "advisory_evaluation_returned_invalid_payload"
+    assert result["decision_modified"] is False

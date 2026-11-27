@@ -22,6 +22,45 @@ from .audit import log_event
 from .governance import record_config_change
 
 
+def _evaluate_decision_advisory_safely(db: Session, context: dict[str, Any]) -> dict[str, Any]:
+    """Run optional AI review without allowing provider failures to block quantitative analysis."""
+    unavailable = {
+        "status": "unavailable",
+        "error": "advisory_evaluation_failed",
+        "error_type": None,
+        "advisors": [],
+        "advice_count": 0,
+        "attempted_count": 0,
+        "primary_provider": None,
+        "fallback_used": False,
+        "action_authority": "none",
+        "decision_modified": False,
+        "final_decision_owner": "TITAN",
+        "risk_veto_owner": "independent_risk_manager",
+    }
+    try:
+        from app.integrations.ai_providers import evaluate_decision_advisory
+
+        report = evaluate_decision_advisory(db, context)
+        if not isinstance(report, dict):
+            unavailable["error"] = "advisory_evaluation_returned_invalid_payload"
+            unavailable["error_type"] = "InvalidAdvisoryPayload"
+            return unavailable
+        # Enforce advisory-only semantics at the integration boundary even if
+        # a provider implementation returns contradictory metadata.
+        safe_report = dict(report)
+        safe_report["decision_modified"] = False
+        safe_report["action_authority"] = "none"
+        if "final_decision_owner" in safe_report:
+            safe_report["final_decision_owner"] = "TITAN"
+        if "risk_veto_owner" in safe_report:
+            safe_report["risk_veto_owner"] = "independent_risk_manager"
+        return safe_report
+    except Exception as exc:
+        unavailable["error_type"] = type(exc).__name__
+        return unavailable
+
+
 ENGINE_REGISTRY = [
     ("compliance_policy", "TITAN COMPLIANCE & POLICY ENGINE", "implemented_partial"),
     ("market_analysis", "Market Analysis Engine", "implemented_partial"),
@@ -828,7 +867,6 @@ class TitanCoreService:
         # Optional external LLM review is strictly advisory and runs only when an
         # enabled provider is configured. It cannot alter the deterministic action
         # or the independent RiskEngine result.
-        from app.integrations.ai_providers import evaluate_decision_advisory
         timeframe_evidence = {}
         for timeframe_key, analysis in analyses.items():
             indicators = getattr(analysis, "indicators", {}) or {}
@@ -851,7 +889,7 @@ class TitanCoreService:
                 } if isinstance(candle_evidence, dict) else {},
             }
         result["news_analysis"] = news_context
-        result["ai_evaluation"] = evaluate_decision_advisory(db, {
+        result["ai_evaluation"] = _evaluate_decision_advisory_safely(db, {
             "symbol": symbol,
             "market": market.value,
             "environment": env.value,
