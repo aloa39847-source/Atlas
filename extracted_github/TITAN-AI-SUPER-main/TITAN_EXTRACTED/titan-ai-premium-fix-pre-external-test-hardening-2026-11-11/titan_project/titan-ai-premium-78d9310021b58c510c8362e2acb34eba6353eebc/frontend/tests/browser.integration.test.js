@@ -51,6 +51,7 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     let futuresOrderbookBacktests = 0
     let testnetPermissionCalls = 0
     let testnetReconcileCalls = 0
+    let emergencyResetCalls = 0
     let masterStarts = 0
     let mockEmergencyStop = false
     let mockTarget = 'demo'
@@ -131,6 +132,11 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
           manual_review_required: false, emergency_stop_active: true,
           note: 'Read-only reconciliation; emergency stop remains latched.',
         }
+      }
+      else if (path === '/api/master/emergency-reset') {
+        emergencyResetCalls += 1
+        mockEmergencyStop = false
+        body = { ok: true, state: { account_target: mockTarget, market_type: mockMarket, bot_run_state: 'stopped', emergency_stop: false }, note: 'Checks passed; worker remains stopped.' }
       }
       else if (path === '/api/master/start') {
         masterStarts += 1
@@ -277,6 +283,12 @@ test('Vite live terminal supports market streams, navigation, actions and Androi
     assert.equal(testnetReconcileCalls, 1, 'manual Testnet reconciliation button did not call its API')
     assert.equal(masterStarts, 1, 'manual reconciliation must never start the trading worker')
     assert.equal(mockEmergencyStop, true, 'reconciliation must not clear Emergency Stop')
+    page.once('dialog', dialog => dialog.accept())
+    await page.getByRole('button', { name: 'إعادة ضبط الإيقاف الطارئ بعد التحقق' }).click()
+    await page.getByText(/اجتازت إعادة ضبط الإيقاف الطارئ فحوص الأمان/).waitFor()
+    assert.equal(emergencyResetCalls, 1, 'explicit reset control did not call the verified reset API')
+    assert.equal(mockEmergencyStop, false, 'successful verified reset should clear the emergency flag')
+    assert.equal(masterStarts, 1, 'emergency reset must never start the trading worker')
     await page.locator('.tt-feature-grid select').nth(1).selectOption('futures')
     await page.waitForFunction(() => window.__lastWsUrl?.startsWith('wss://fstream.binance.com/'))
     await page.locator('.tt-feature-grid select').nth(1).selectOption('spot')
