@@ -667,9 +667,68 @@ class BinanceTestnetAdapter:
         return {"ok": False, "sent_to_exchange": False, "error": "isolated_margin_setup_failed",
                 "margin_type": "ISOLATED", "response": result}
 
+    def _futures_position_order_params(
+        self, *, side: str, reduce_only: bool, position_side: str | None = None,
+    ) -> dict[str, Any]:
+        """Build Futures parameters for the account's verified One-way/Hedge mode.
+
+        Binance Hedge Mode requires positionSide=LONG/SHORT and rejects
+        reduceOnly. One-way Mode uses reduceOnly for position-reducing orders.
+        Mode lookup failure is fail-closed before any order submission.
+        """
+        if self.config.market != "futures":
+            return {}
+
+        mode = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+        if (
+            not isinstance(mode, dict)
+            or mode.get("error")
+            or not isinstance(mode.get("dualSidePosition"), bool)
+        ):
+            return {
+                "error": "futures_position_mode_unavailable",
+                "details": mode,
+            }
+
+        normalized_side = str(side or "").strip().upper()
+        if normalized_side not in {"BUY", "SELL"}:
+            return {"error": "invalid_futures_order_side"}
+
+        supplied_position_side = (
+            str(position_side).strip().upper() if position_side is not None else None
+        )
+        if supplied_position_side not in {None, "LONG", "SHORT"}:
+            return {"error": "invalid_futures_position_side"}
+
+        if reduce_only:
+            inferred_position_side = "LONG" if normalized_side == "SELL" else "SHORT"
+        else:
+            inferred_position_side = "LONG" if normalized_side == "BUY" else "SHORT"
+
+        selected_position_side = supplied_position_side or inferred_position_side
+        expected_order_side = (
+            ("SELL" if selected_position_side == "LONG" else "BUY")
+            if reduce_only else
+            ("BUY" if selected_position_side == "LONG" else "SELL")
+        )
+        if normalized_side != expected_order_side:
+            return {
+                "error": "futures_order_side_position_side_mismatch",
+                "side": normalized_side,
+                "position_side": selected_position_side,
+                "reduce_only": bool(reduce_only),
+            }
+
+        if mode["dualSidePosition"] is True:
+            # Binance does not permit reduceOnly in Hedge Mode.
+            return {"positionSide": selected_position_side}
+        # In One-way Mode Binance manages the net position; positionSide is omitted.
+        return {"reduceOnly": "true"} if reduce_only else {}
+
     def place_order(self, symbol: str, side: str, order_type: str, quantity: float,
                     price: float | None = None, *, leverage: float = 1.0,
                     reduce_only: bool = False, idempotency_key: str | None = None,
+                    position_side: str | None = None,
                     market_conduct_flags: dict[str, Any] | None = None) -> dict[str, Any]:
         blocked = self._execution_ready()
         if blocked:
@@ -688,6 +747,20 @@ class BinanceTestnetAdapter:
         account = self.get_account()
         if not isinstance(account, dict) or account.get("error") or account.get("canTrade") is not True:
             return {"ok": False, "sent_to_exchange": False, "error": "testnet_account_not_tradeable", "details": account}
+
+        futures_position_params: dict[str, Any] = {}
+        if market == MarketType.FUTURES:
+            futures_position_params = self._futures_position_order_params(
+                side=side,
+                reduce_only=bool(reduce_only),
+                position_side=position_side,
+            )
+            if futures_position_params.get("error"):
+                return {
+                    "ok": False,
+                    "sent_to_exchange": False,
+                    **futures_position_params,
+                }
         try:
             filters = self._symbol_filters(symbol)
             # The limit price is never a valid substitute for the market reference
@@ -808,8 +881,8 @@ class BinanceTestnetAdapter:
                 return {"ok": False, "sent_to_exchange": False, "error": "limit_price_required"}
             params["price"] = format(float(price), ".12f").rstrip("0").rstrip(".")
             params["timeInForce"] = "GTC"
-        if market == MarketType.FUTURES and reduce_only:
-            params["reduceOnly"] = "true"
+        if market == MarketType.FUTURES:
+            params.update(futures_position_params)
         endpoint = "/fapi/v1/order" if market == MarketType.FUTURES else "/api/v3/order"
         res = self._request("POST", endpoint, signed=True, params=params)
         ok = isinstance(res, dict) and "error" not in res
@@ -828,7 +901,8 @@ class BinanceTestnetAdapter:
                 "precheck": pre.to_dict(), "leverage": int(lev) if market == MarketType.FUTURES else 1}
 
     def close_position(self, symbol: str, side: str, quantity: float, *, leverage: float = 1.0,
-                       idempotency_key: str | None = None) -> dict[str, Any]:
+                       idempotency_key: str | None = None,
+                       position_side: str | None = None) -> dict[str, Any]:
         position_side = str(side or "").strip().upper()
         if position_side in {"BUY", "LONG", "LONG_SPOT"}:
             close_side = "SELL"
@@ -836,9 +910,15 @@ class BinanceTestnetAdapter:
             close_side = "BUY"
         else:
             return {"ok": False, "sent_to_exchange": False, "error": "invalid_position_side_for_close"}
+        inferred_position_side = (
+            "LONG" if position_side in {"BUY", "LONG", "LONG_SPOT"}
+            else "SHORT" if position_side in {"SELL", "SHORT"} else None
+        )
+        selected_position_side = str(position_side or inferred_position_side or "").upper() or None
         return self.place_order(symbol, close_side, "MARKET", quantity, leverage=leverage,
                                 reduce_only=self.config.market == "futures",
-                                idempotency_key=idempotency_key)
+                                idempotency_key=idempotency_key,
+                                position_side=selected_position_side)
 
     def get_account(self) -> dict[str, Any]:
         if self.config.market == "futures":
