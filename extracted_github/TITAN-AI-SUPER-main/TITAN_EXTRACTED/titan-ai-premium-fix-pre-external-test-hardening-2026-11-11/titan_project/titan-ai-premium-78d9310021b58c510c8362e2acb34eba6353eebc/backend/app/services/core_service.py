@@ -266,6 +266,20 @@ class TitanCoreService:
                   live_confirm: bool | None = None) -> dict[str, Any]:
         s = self._state(db)
         old = self.get_state(db)
+        active_states = {"starting", "running", "analyzing", "executing", "waiting_data"}
+        if str(getattr(s, "bot_run_state", "stopped") or "stopped").lower() in active_states:
+            current_target = str(getattr(s, "account_target", "demo") or "demo").strip().lower()
+            current_market = str(getattr(s, "market_type", "spot") or "spot").strip().lower()
+            requested_target = None
+            if account_target is not None:
+                requested_target = str(account_target).strip().lower()
+            elif environment_mode is not None:
+                requested_environment = EnvironmentMode(environment_mode)
+                requested_target = "live" if requested_environment == EnvironmentMode.LIVE else "demo"
+            requested_market = str(market_type).strip().lower() if market_type is not None else current_market
+            if ((requested_target is not None and requested_target != current_target)
+                    or requested_market != current_market):
+                raise ValueError("cannot_change_account_or_market_while_worker_active")
         requested_live = (
             str(account_target or "").strip().lower() == "live"
             or str(environment_mode or "").strip().lower() == EnvironmentMode.LIVE.value
