@@ -45,6 +45,13 @@ _TESTNET_TRADE_PERMISSION_LOCK = threading.Lock()
 _TESTNET_TRADE_PERMISSION_CACHE: dict[tuple[str, str, str], float] = {}
 _TESTNET_TRADE_PERMISSION_TTL_SECONDS = 300
 
+# USD-M Futures GET /fapi/v1/positionSide/dual has a high IP request weight.
+# Cache the read-only account mode briefly per API-key fingerprint and endpoint;
+# never cache missing credentials, malformed responses, or failed lookups.
+_FUTURES_POSITION_MODE_LOCK = threading.Lock()
+_FUTURES_POSITION_MODE_CACHE: dict[tuple[str, str], tuple[bool, float]] = {}
+_FUTURES_POSITION_MODE_TTL_SECONDS = 60
+
 
 def _rate_limit_remaining() -> float:
     with _RATE_LIMIT_LOCK:
@@ -667,6 +674,46 @@ class BinanceTestnetAdapter:
         return {"ok": False, "sent_to_exchange": False, "error": "isolated_margin_setup_failed",
                 "margin_type": "ISOLATED", "response": result}
 
+    def _get_futures_position_mode(self) -> dict[str, Any]:
+        """Read/cache the signed Futures position mode without burning weight 30 per order."""
+        try:
+            base = self._base_url()
+            api_key = self._api_key()
+        except Exception as exc:
+            return {"error": "futures_position_mode_credentials_unavailable",
+                    "detail": type(exc).__name__}
+
+        cache_key = None
+        if isinstance(api_key, str) and api_key.strip():
+            fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+            cache_key = (base, fingerprint)
+            now = time.monotonic()
+            with _FUTURES_POSITION_MODE_LOCK:
+                cached = _FUTURES_POSITION_MODE_CACHE.get(cache_key)
+                if cached is not None:
+                    dual_side, expires_at = cached
+                    if now < expires_at:
+                        return {"dualSidePosition": dual_side, "cached": True}
+                    _FUTURES_POSITION_MODE_CACHE.pop(cache_key, None)
+
+        response = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+        if (
+            not isinstance(response, dict)
+            or response.get("error")
+            or not isinstance(response.get("dualSidePosition"), bool)
+        ):
+            return response if isinstance(response, dict) else {
+                "error": "futures_position_mode_invalid_response",
+            }
+
+        dual_side = response["dualSidePosition"]
+        if cache_key is not None:
+            with _FUTURES_POSITION_MODE_LOCK:
+                _FUTURES_POSITION_MODE_CACHE[cache_key] = (
+                    dual_side, time.monotonic() + _FUTURES_POSITION_MODE_TTL_SECONDS,
+                )
+        return {"dualSidePosition": dual_side, "cached": False}
+
     def _futures_position_order_params(
         self, *, side: str, reduce_only: bool, position_side: str | None = None,
     ) -> dict[str, Any]:
@@ -679,7 +726,7 @@ class BinanceTestnetAdapter:
         if self.config.market != "futures":
             return {}
 
-        mode = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+        mode = self._get_futures_position_mode()
         if (
             not isinstance(mode, dict)
             or mode.get("error")
