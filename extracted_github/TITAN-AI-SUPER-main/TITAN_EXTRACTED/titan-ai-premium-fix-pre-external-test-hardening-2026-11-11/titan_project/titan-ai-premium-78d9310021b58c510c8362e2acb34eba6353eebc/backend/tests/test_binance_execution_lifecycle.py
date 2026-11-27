@@ -322,3 +322,29 @@ def test_uncertain_submission_lookup_with_mismatched_client_order_id_stays_unkno
     finally:
         db.close()
         engine.dispose()
+
+
+def test_live_order_cancel_is_disabled_in_read_only_release(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    adapter_calls = []
+    monkeypatch.setattr(
+        binance_execution_service, "adapter_for",
+        lambda *args, **kwargs: adapter_calls.append((args, kwargs)),
+    )
+    try:
+        state = db.get(SystemState, 1)
+        state.account_target = "live"
+        state.environment_mode = "live"
+        state.live_trading_enabled = False
+        db.add(state)
+        db.commit()
+
+        result = binance_execution_service.cancel_order(db, local_order_id=123)
+
+        assert result["ok"] is False
+        assert result["sent_to_exchange"] is False
+        assert result["error"] == "live_operations_disabled_by_server"
+        assert adapter_calls == []
+    finally:
+        db.close()
+        engine.dispose()
