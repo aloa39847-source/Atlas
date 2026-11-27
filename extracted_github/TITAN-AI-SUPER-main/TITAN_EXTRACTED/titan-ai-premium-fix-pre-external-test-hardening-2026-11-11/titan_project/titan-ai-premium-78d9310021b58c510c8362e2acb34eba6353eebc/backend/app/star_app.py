@@ -3160,6 +3160,22 @@ async def binance_testnet_status(request):
     except Exception as e:
         return J({"ok": False, "error": str(e)}, 400)
 
+async def binance_testnet_validate_trade_permission(request):
+    auth_error = _binance_auth_error(request)
+    if auth_error:
+        return auth_error
+    try:
+        payload = await body(request)
+        market = str(payload.get("market") or request.query_params.get("market") or "spot").strip().lower()
+        symbol = str(payload.get("symbol") or "BTCUSDT").strip().upper()
+        if market not in {"spot", "futures"}:
+            return J({"ok": False, "error": "unsupported_testnet_market", "order_submitted": False}, 400)
+        result = _get_binance_adapter(market).validate_testnet_trade_permission(symbol)
+        return J(result, 200 if result.get("ok") else 409)
+    except Exception as exc:
+        return J({"ok": False, "error": "testnet_trade_permission_validation_failed",
+                  "detail": str(exc)[:240], "order_submitted": False}, 503)
+
 async def binance_testnet_order(request):
     # Direct API-triggered orders bypass the supervised decision, position,
     # loss-limit, and durable execution lifecycle. Keep this legacy route
@@ -3637,6 +3653,7 @@ routes = [
     Route("/api/binance/live/delete", binance_live_delete, methods=["POST"]),
     Route("/api/binance/execution/preflight", binance_execution_preflight),
     Route("/api/binance/testnet/status", binance_testnet_status),
+    Route("/api/binance/testnet/validate-trade-permission", binance_testnet_validate_trade_permission, methods=["POST"]),
     Route("/api/binance/testnet/futures/maintenance-brackets", binance_testnet_futures_maintenance_brackets),
     Route("/api/binance/testnet/creds", binance_testnet_creds_status),
     Route("/api/binance/testnet/save", binance_testnet_save, methods=["POST"]),
