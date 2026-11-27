@@ -48,7 +48,8 @@ def test_system_status_reports_actual_sanitized_integrations(monkeypatch):
     assert result["integrations"]["binance"]["orders_submitted"] is False
     assert result["integrations"]["binance"]["server_live_enabled"] is bool(settings.live_trading_enabled)
     assert result["integrations"]["binance"]["user_live_confirmed"] is False
-    assert result["integrations"]["binance"]["live_start_required"] is True
+    assert result["integrations"]["binance"]["live_start_required"] is False
+    assert result["integrations"]["binance"]["live_execution_hard_disabled"] is True
     assert result["integrations"]["binance"]["execution_ready"] is False
     assert result["integrations"]["ai_providers"]["status"] == "connection_tested"
     assert result["integrations"]["ai_providers"]["enabled_analysis_advisors"] == 2
@@ -118,7 +119,8 @@ def test_live_credentials_status_reports_server_gate_and_user_confirmation(monke
     assert payload["configured"] is True
     assert payload["server_live_enabled"] is False
     assert payload["user_live_confirmed"] is False
-    assert payload["live_start_required"] is True
+    assert payload["live_start_required"] is False
+    assert payload["live_execution_hard_disabled"] is True
     assert payload["live_blocked"] is True
     assert "NEVER_RETURN_KEY" not in response.body.decode("utf-8")
     assert "NEVER_RETURN_SECRET" not in response.body.decode("utf-8")
