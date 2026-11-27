@@ -503,6 +503,32 @@ class TechnicalAnalysisEngine(Engine):
             signals.append("macd_hist_positive" if mh > 0 else "macd_hist_negative")
 
         structure = self._market_structure(high, low, close, open_prices=open_prices, volumes=vol)
+
+        # ICT displacement is a completed-candle event, not a generic volume
+        # spike. Require a directional body of at least one ATR, a close in
+        # the outer 20% of the candle, and relative volume >= 1.5x.
+        atr_value = last.get("atr14")
+        volume_ratio = last.get("volume_ratio")
+        candle_open = _f(open_prices[-1]) if open_prices else None
+        candle_high = _f(high[-1]) if high else None
+        candle_low = _f(low[-1]) if low else None
+        if (
+            isinstance(atr_value, (int, float)) and atr_value > 0
+            and isinstance(volume_ratio, (int, float)) and volume_ratio >= 1.5
+            and candle_open is not None and candle_high is not None and candle_low is not None
+            and math.isfinite(candle_open) and math.isfinite(candle_high)
+            and math.isfinite(candle_low) and math.isfinite(c)
+        ):
+            candle_range = candle_high - candle_low
+            body = c - candle_open
+            body_atr = abs(body) / float(atr_value)
+            close_location = (c - candle_low) / candle_range if candle_range > 0 else None
+            if body_atr >= 1.0 and close_location is not None:
+                if body > 0 and close_location >= 0.80:
+                    signals.append("bullish_displacement")
+                elif body < 0 and close_location <= 0.20:
+                    signals.append("bearish_displacement")
+
         for sweep in structure.get("liquidity_sweeps", []):
             signals.append("liquidity_sweep_" + str(sweep.get("direction")))
         for gap in structure.get("fair_value_gaps", []):
