@@ -46,7 +46,7 @@ class SelfDiagnosisEngine:
             ("strategies", lambda: self._check_strategies(db)),
             ("decisions", lambda: self._check_decisions(db)),
             ("engines", lambda: self._check_engines(db)),
-            ("binance_testnet", self._check_binance_testnet),
+            ("binance_testnet", lambda: self._check_binance_testnet(db)),
             ("risk_engine", self._check_risk),
         ]
         for name, fn in checks:
@@ -339,21 +339,89 @@ class SelfDiagnosisEngine:
         except Exception as e:
             return {"status": "error", "detail": str(e)}
 
-    def _check_binance_testnet(self) -> dict[str, Any]:
+    def _check_binance_testnet(self, db=None) -> dict[str, Any]:
+        """Check the selected Testnet market using market-scoped encrypted key references."""
         try:
             from app.integrations.binance_adapter import BinanceTestnetAdapter, BinanceConfig
             from app.services.credentials import load_testnet_credentials
-            creds = load_testnet_credentials()
-            if not creds.get("configured"):
-                return {"status": "warning", "detail": "Testnet not configured (no API keys)"}
-            cfg = BinanceConfig(api_key=creds["api_key"], api_secret=creds["api_secret"], market=creds.get("market", "spot"))
-            adapter = BinanceTestnetAdapter(cfg)
-            st = adapter.status()
-            if st.get("connected"):
-                return {"status": "ok", "detail": f"Testnet connected ({st.get('market','spot')})"}
-            return {"status": "warning", "detail": f"Testnet not connected: {st.get('note','')}"}
+
+            selected_market = "spot"
+            if db is not None:
+                try:
+                    from app.services.core_service import core_service
+                    selected_state = core_service.get_state(db)
+                    candidate = str(selected_state.get("market_type") or "spot").strip().lower()
+                    if candidate in {"spot", "futures"}:
+                        selected_market = candidate
+                except Exception:
+                    pass
+
+            markets: dict[str, dict[str, Any]] = {}
+            for market in ("spot", "futures"):
+                creds = load_testnet_credentials(market)
+                configured = bool(creds.get("configured"))
+                if not configured:
+                    markets[market] = {
+                        "configured": False,
+                        "status": "not_configured",
+                        "connected": False,
+                        "execution_ready": False,
+                        "api_key_trade_permission_verified": False,
+                    }
+                    continue
+
+                adapter = BinanceTestnetAdapter(BinanceConfig(
+                    enabled=True,
+                    environment="testnet",
+                    market=market,
+                    api_key_ref=f"stored:testnet:{market}:api_key",
+                    api_secret_ref=f"stored:testnet:{market}:api_secret",
+                ))
+                status = adapter.status()
+                connected = status.get("connected") is True
+                execution_ready = status.get("execution_ready") is True
+                markets[market] = {
+                    "configured": True,
+                    "status": (
+                        "ready" if execution_ready else
+                        "connected_trade_permission_unverified" if connected else
+                        "connection_failed"
+                    ),
+                    "connected": connected,
+                    "account_can_trade": status.get("account_can_trade"),
+                    "api_key_trade_permission_verified": status.get("api_key_trade_permission_verified") is True,
+                    "execution_ready": execution_ready,
+                    "execution_readiness_check": status.get("execution_readiness_check"),
+                }
+
+            selected = markets[selected_market]
+            if selected["status"] == "ready":
+                overall_status = "ok"
+                detail = f"Binance {selected_market.title()} Testnet connected; API-key TRADE permission is verified."
+            elif selected["status"] == "connected_trade_permission_unverified":
+                overall_status = "warning"
+                detail = (
+                    f"Binance {selected_market.title()} Testnet account is connected, but API-key TRADE permission "
+                    "has not been verified with the non-matching-engine order/test endpoint."
+                )
+            elif selected["status"] == "not_configured":
+                overall_status = "warning"
+                detail = f"Binance {selected_market.title()} Testnet credentials are not configured."
+            else:
+                overall_status = "warning"
+                detail = (
+                    f"Binance {selected_market.title()} Testnet connection failed: "
+                    f"{selected.get('execution_readiness_check') or 'account_status_unavailable'}"
+                )
+            return {
+                "status": overall_status,
+                "detail": detail,
+                "selected_market": selected_market,
+                "markets": markets,
+                "verification_scope": "signed_account_status_and_cached_order_test_permission_only; no_order_submitted",
+            }
         except Exception as e:
-            return {"status": "error", "detail": str(e)}
+            return {"status": "error", "detail": str(e)[:240]}
 
     def _check_risk(self) -> dict[str, Any]:
         try:
