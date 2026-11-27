@@ -9,9 +9,16 @@ from app.services.binance_execution import binance_execution_service
 
 
 class FakeTestnetAdapter:
-    def __init__(self, place_result):
+    def __init__(self, place_result, lookup_result=None, fee_result=None):
         self.place_result = place_result
+        self.lookup_result = lookup_result or {"error": "order_lookup_not_found"}
+        self.fee_result = fee_result or {
+            "ok": False, "pending": True, "error": "fee_history_unavailable",
+        }
         self.place_calls = 0
+        self.lookup_calls = 0
+        self.lookup_client_order_ids = []
+        self.fee_calls = 0
 
     def reconcile(self, local_open_orders):
         return {"ok": True, "local_open_orders_count": len(local_open_orders)}
@@ -19,6 +26,15 @@ class FakeTestnetAdapter:
     def place_order(self, **kwargs):
         self.place_calls += 1
         return self.place_result
+
+    def get_order(self, symbol, *, client_order_id=None, order_id=None):
+        self.lookup_calls += 1
+        self.lookup_client_order_ids.append(client_order_id)
+        return self.lookup_result
+
+    def get_order_fee_quote(self, symbol, order_id, *, fills=None):
+        self.fee_calls += 1
+        return self.fee_result
 
 
 def _session(tmp_path):
@@ -113,12 +129,115 @@ def test_timed_out_testnet_submission_is_unknown_and_never_resent(tmp_path, monk
         assert state.bot_run_state == "stopped"
         assert state.autonomous_enabled is False
         assert state.bot_stop_reason == "binance_order_outcome_uncertain"
+        assert result["outcome_uncertain"] is True
+        assert result["sent_to_exchange"] is None
+        assert result["reconciled_after_uncertain_submit"] is False
+        assert adapter.lookup_calls == 1
+        assert adapter.lookup_client_order_ids == [order.client_order_id]
+        assert (order.metadata_json or {})["submission_reconciliation"]["resolved"] is False
 
         duplicate = _execute(db, "testnet-timeout-order-0001")
         assert duplicate["duplicate"] is True
         assert duplicate["sent_to_exchange"] is False
         assert duplicate["status"] == "unknown"
         assert adapter.place_calls == 1
+        assert adapter.lookup_calls == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+
+def test_timed_out_submission_is_recovered_by_read_only_client_order_id_lookup(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    adapter = FakeTestnetAdapter(
+        {
+            "sent_to_exchange": False,
+            "error": "timed out while waiting for Binance response",
+        },
+        lookup_result={
+            "symbol": "BTCUSDT",
+            "orderId": 778899,
+            "clientOrderId": "titan-recovered-order",
+            "status": "FILLED",
+            "origQty": "0.1",
+            "executedQty": "0.1",
+            "avgPrice": "101.25",
+            "cummulativeQuoteQty": "10.125",
+        },
+        fee_result={"ok": True, "fees_paid_usdt": 0.01, "fee_breakdown": {"USDT": 0.01}},
+    )
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {"ready": True})
+    monkeypatch.setattr("app.services.binance_execution.log_event", lambda *args, **kwargs: None)
+    try:
+        result = _execute(db, "testnet-timeout-order-recovered-0001")
+        order = db.execute(select(OrderRecord)).scalar_one()
+        state = db.get(SystemState, 1)
+
+        assert result["ok"] is True
+        assert result["sent_to_exchange"] is True
+        assert result["reconciled_after_uncertain_submit"] is True
+        assert result["status"] == "filled"
+        assert order.status == "filled"
+        assert order.exchange_order_id == "778899"
+        assert order.filled_quantity == 0.1
+        assert order.avg_fill_price == 101.25
+        assert order.fees_paid == 0.01
+        assert (order.metadata_json or {})["submission_reconciliation"]["method"] == "read_only_client_order_id_lookup"
+        assert state.emergency_stop is False
+        assert state.bot_run_state == "running"
+        assert adapter.place_calls == 1
+        assert adapter.lookup_calls == 1
+        assert adapter.fee_calls == 1
+
+        duplicate = _execute(db, "testnet-timeout-order-recovered-0001")
+        assert duplicate["duplicate"] is True
+        assert duplicate["sent_to_exchange"] is False
+        assert duplicate["status"] == "filled"
+        assert adapter.place_calls == 1
+        assert adapter.lookup_calls == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_timed_out_submission_recovered_as_partial_fill_latches_emergency_stop(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    adapter = FakeTestnetAdapter(
+        {
+            "sent_to_exchange": False,
+            "error": "connection timed out after request write",
+        },
+        lookup_result={
+            "symbol": "BTCUSDT",
+            "orderId": 998877,
+            "clientOrderId": "titan-partial-recovered",
+            "status": "PARTIALLY_FILLED",
+            "origQty": "0.1",
+            "executedQty": "0.04",
+            "avgPrice": "100.5",
+            "cummulativeQuoteQty": "4.02",
+        },
+    )
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {"ready": True})
+    monkeypatch.setattr("app.services.binance_execution.log_event", lambda *args, **kwargs: None)
+    try:
+        result = _execute(db, "testnet-timeout-order-partial-0001")
+        order = db.execute(select(OrderRecord)).scalar_one()
+        state = db.get(SystemState, 1)
+
+        assert result["ok"] is True
+        assert result["sent_to_exchange"] is True
+        assert result["status"] == "partially_filled"
+        assert order.status == "partially_filled"
+        assert order.filled_quantity == 0.04
+        assert state.emergency_stop is True
+        assert state.bot_run_state == "stopped"
+        assert state.bot_stop_reason == "partial_exchange_fill_manual_reconciliation_required"
+        assert adapter.place_calls == 1
+        assert adapter.lookup_calls == 1
     finally:
         db.close()
         engine.dispose()
