@@ -70,7 +70,7 @@ ENGINE_INTEGRATION_MAP = {
     "decision_making": {"mode": "decision_pipeline", "integration": "TitanCoreService.analyze -> DecisionEngine.decide", "decision_evidence": True, "authority": "final_deterministic_decision"},
     "risk_management": {"mode": "independent_guardrail", "integration": "DecisionEngine RiskEngine plus supervised worker risk checks", "decision_evidence": True, "authority": "independent_veto"},
     "portfolio_management": {"mode": "decision_pipeline", "integration": "Open-position exposure/count checks before decision sizing", "decision_evidence": True, "authority": "exposure_guardrail"},
-    "trade_execution": {"mode": "supervised_execution", "integration": "Binance execution service via supervised trading worker", "decision_evidence": False, "authority": "supervised_worker_only_explicit_live_start_confirmation"},
+    "trade_execution": {"mode": "supervised_execution", "integration": "Binance Spot/Futures Testnet execution via supervised worker; Live execution is hard-disabled in this release", "decision_evidence": False, "authority": "testnet_worker_only_live_hard_disabled"},
     "position_management": {"mode": "position_lifecycle", "integration": "Persistent position ledger and supervised exchange reconciliation", "decision_evidence": False, "authority": "no_independent_order_authority"},
     "backtesting": {"mode": "on_demand", "integration": "BacktestEngine and portfolio backtest endpoints", "decision_evidence": False, "authority": "simulation_only"},
     "ai_learning": {"mode": "learning_context", "integration": "Historical outcome memory supplied to DecisionEngine and learning APIs", "decision_evidence": True, "authority": "advisory_no_auto_strategy_change"},
