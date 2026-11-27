@@ -286,6 +286,8 @@ def test_futures_open_order_is_blocked_if_exchange_refuses_isolated_margin(monke
 
     def fake_request(method, path, signed=False, params=None):
         calls.append(path)
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         if path == "/fapi/v2/account":
             return {"canTrade": True, "availableBalance": "1000"}
         if path == "/fapi/v1/openOrders":
