@@ -284,3 +284,41 @@ def test_adapter_exception_after_durable_submission_boundary_uses_read_only_look
     finally:
         db.close()
         engine.dispose()
+
+
+def test_uncertain_submission_lookup_with_mismatched_client_order_id_stays_unknown(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    adapter = FakeTestnetAdapter(
+        {
+            "sent_to_exchange": False,
+            "error": "timed out after submission",
+        },
+        lookup_result={
+            "symbol": "BTCUSDT",
+            "clientOrderId": "titan-some-other-order",
+            "orderId": 112233,
+            "status": "FILLED",
+            "executedQty": "0.1",
+            "avgPrice": "100",
+        },
+    )
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {"ready": True})
+    monkeypatch.setattr("app.services.binance_execution.log_event", lambda *args, **kwargs: None)
+    try:
+        result = _execute(db, "testnet-timeout-wrong-client-id-0001")
+        order = db.execute(select(OrderRecord)).scalar_one()
+        state = db.get(SystemState, 1)
+
+        assert result["ok"] is False
+        assert result["outcome_uncertain"] is True
+        assert result["sent_to_exchange"] is None
+        assert order.status == "unknown"
+        assert state.emergency_stop is True
+        assert state.bot_run_state == "stopped"
+        assert adapter.place_calls == 1
+        assert adapter.lookup_calls == 1
+        assert adapter.fee_calls == 0
+    finally:
+        db.close()
+        engine.dispose()
