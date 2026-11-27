@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Binance Spot Testnet smoke test. This script cannot submit orders."""
+"""Spot Testnet permission smoke test. It validates TRADE scope via order/test only; no order is submitted."""
 from __future__ import annotations
 
 import json
@@ -24,8 +24,9 @@ def main() -> int:
         emit({"ok": False, "error": "invalid_symbol"})
         return 2
 
-    # Execution stays disabled. status() performs a signed GET only; no order
-    # endpoint is called anywhere in this diagnostic.
+    # Actual order submission stays disabled. The only TRADE-scope check below
+    # uses Binance's order/test endpoint, which validates parameters without
+    # sending an order into the matching engine.
     credentials_present = bool(
         os.getenv("BINANCE_TESTNET_API_KEY")
         and os.getenv("BINANCE_TESTNET_API_SECRET")
@@ -48,7 +49,7 @@ def main() -> int:
 
     # Check private account authentication FIRST. Use the adapter's signed
     # account GET directly so its low-level Binance error is not collapsed into
-    # a generic status flag. This is read-only; no order endpoint is called.
+    # a generic status flag.
     if credentials_present:
         try:
             account = adapter._request("GET", "/api/v3/account", signed=True)
@@ -107,12 +108,28 @@ def main() -> int:
             "execution_ready": False,
             "execution_readiness_check": (
                 "account_authentication_not_verified" if not account_ok else
-                "api_key_trade_permission_requires_explicit_test_order_validation"
+                "api_key_trade_permission_requires_test_order_validation"
                 if account.get("canTrade") is True else "binance_account_trading_disabled"
             ),
             "withdrawal_operations_supported": False,
             "diagnostic": diagnostic or ({"error": account_error} if account_error else {}),
         }
+        if account_ok and account.get("canTrade") is True:
+            validation = adapter.validate_testnet_trade_permission(symbol)
+            report["testnet_trade_permission_validation"] = validation
+            verified = bool(validation.get("ok") and validation.get("verified"))
+            report["testnet_account_auth"]["trade_permission"] = True if verified else None
+            report["testnet_account_auth"]["api_key_trade_permission_verified"] = True if verified else None
+            report["testnet_account_auth"]["execution_ready"] = verified
+            report["testnet_account_auth"]["execution_readiness_check"] = (
+                "ok" if verified else validation.get("error", "test_order_validation_failed")
+            )
+        else:
+            report["testnet_trade_permission_validation"] = {
+                "ok": False, "skipped": True,
+                "reason": "account authentication and canTrade must be verified first",
+                "order_submitted": False,
+            }
     else:
         account_ok = False
         report["testnet_account_auth"] = {
@@ -202,6 +219,7 @@ def main() -> int:
 
     checks = [
         report["testnet_account_auth"].get("ok") is True,
+        report.get("testnet_trade_permission_validation", {}).get("ok") is True,
         report["testnet_exchange_info"].get("ok") is True,
         report["futures_testnet_exchange_info"].get("ok") is True,
         report.get("market_data", {}).get("ok") is True,
@@ -213,7 +231,14 @@ def main() -> int:
         == "binance_location_restricted_auth_not_verified"
     )
     report["external_access_blocked"] = location_restricted
-    report["next_stage"] = "testnet_order_lifecycle_requires_a_separate_explicitly_approved_workflow"
+    report["order_test_endpoint_called"] = bool(report.get("testnet_trade_permission_validation", {}).get("validation_request_sent"))
+    report["order_submitted"] = False
+    report["matching_engine_reached"] = False
+    report["next_stage"] = (
+        "spot_testnet_order_lifecycle_requires_separate_explicit_approval"
+        if report.get("testnet_trade_permission_validation", {}).get("ok")
+        else "enable_testnet_api_key_trade_permission_then_repeat_order_test_validation"
+    )
     emit(report)
     # External access restrictions are a failed live-verification gate.
     # They must never be converted into a successful CI result: authentication
