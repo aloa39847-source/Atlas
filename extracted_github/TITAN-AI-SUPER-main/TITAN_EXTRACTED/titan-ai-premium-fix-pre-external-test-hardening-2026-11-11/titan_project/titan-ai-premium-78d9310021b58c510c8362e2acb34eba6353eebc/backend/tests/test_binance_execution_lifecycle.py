@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models import db as dbmod
-from app.models.entities import OrderRecord, SystemState
+from app.models.entities import OrderRecord, PositionRecord, SystemState
 from app.services.binance_execution import binance_execution_service
 
 
@@ -17,6 +17,7 @@ class FakeTestnetAdapter:
         }
         self.place_error = place_error
         self.place_calls = 0
+        self.place_kwargs = []
         self.lookup_calls = 0
         self.lookup_client_order_ids = []
         self.fee_calls = 0
@@ -26,6 +27,7 @@ class FakeTestnetAdapter:
 
     def place_order(self, **kwargs):
         self.place_calls += 1
+        self.place_kwargs.append(dict(kwargs))
         if self.place_error is not None:
             raise self.place_error
         return self.place_result
@@ -345,6 +347,204 @@ def test_live_order_cancel_is_disabled_in_read_only_release(tmp_path, monkeypatc
         assert result["sent_to_exchange"] is False
         assert result["error"] == "live_operations_disabled_by_server"
         assert adapter_calls == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+
+@pytest.mark.parametrize(
+    ("position_side", "order_side", "expected_leg"),
+    [
+        ("long", "SELL", "LONG"),
+        ("short", "BUY", "SHORT"),
+    ],
+)
+def test_futures_close_uses_persisted_position_leg_for_execution(
+    tmp_path, monkeypatch, position_side, order_side, expected_leg,
+):
+    engine, db = _session(tmp_path)
+    state = db.get(SystemState, 1)
+    state.market_type = "futures"
+    position = PositionRecord(
+        environment_mode="testnet",
+        market_type="futures",
+        symbol="BTCUSDT",
+        side=position_side,
+        quantity=0.05,
+        entry_avg_price=100.0,
+        mark_price=100.0,
+        leverage=2.0,
+        status="open",
+        shadow=False,
+        metadata_json={},
+    )
+    db.add_all([state, position])
+    db.commit()
+    db.refresh(position)
+
+    adapter = FakeTestnetAdapter({
+        "ok": True,
+        "sent_to_exchange": True,
+        "response": {
+            "status": "FILLED",
+            "orderId": 90123,
+            "clientOrderId": "titan-futures-close",
+            "executedQty": "0.02",
+            "avgPrice": "101.0",
+            "cummulativeQuoteQty": "2.02",
+        },
+        "fee_accounting": {"ok": False, "pending": True, "error": "fixture"},
+    })
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    monkeypatch.setattr(binance_execution_service, "preflight", lambda *args, **kwargs: {"ready": True})
+    try:
+        result = binance_execution_service.execute_order(
+            db,
+            symbol="BTCUSDT",
+            side=order_side,
+            order_type="market",
+            quantity=0.02,
+            leverage=2.0,
+            reduce_only=True,
+            idempotency_key=f"futures-close-{position_side}-0001",
+            order_metadata={"intent": "close", "position_id": position.id},
+        )
+        assert result["ok"] is True
+        assert result["sent_to_exchange"] is True
+        assert adapter.place_calls == 1
+        assert adapter.place_kwargs[0]["position_side"] == expected_leg
+        order = db.execute(select(OrderRecord)).scalar_one()
+        assert order.metadata_json["futures_position_side"] == expected_leg
+        assert order.metadata_json["reduce_only"] is True
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_futures_close_rejects_wrong_order_direction_for_stored_position(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    state = db.get(SystemState, 1)
+    state.market_type = "futures"
+    position = PositionRecord(
+        environment_mode="testnet",
+        market_type="futures",
+        symbol="BTCUSDT",
+        side="long",
+        quantity=0.05,
+        entry_avg_price=100.0,
+        mark_price=100.0,
+        leverage=2.0,
+        status="open",
+        shadow=False,
+        metadata_json={},
+    )
+    db.add_all([state, position])
+    db.commit()
+    db.refresh(position)
+    adapter = FakeTestnetAdapter()
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    try:
+        result = binance_execution_service.execute_order(
+            db,
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="market",
+            quantity=0.02,
+            leverage=2.0,
+            reduce_only=True,
+            idempotency_key="futures-close-wrong-leg-0001",
+            order_metadata={"intent": "close", "position_id": position.id},
+        )
+        assert result["ok"] is False
+        assert result["error"] == "futures_close_order_side_position_mismatch"
+        assert adapter.place_calls == 0
+        assert db.execute(select(OrderRecord)).scalars().all() == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_futures_close_rejects_quantity_above_open_position(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    state = db.get(SystemState, 1)
+    state.market_type = "futures"
+    position = PositionRecord(
+        environment_mode="testnet",
+        market_type="futures",
+        symbol="BTCUSDT",
+        side="short",
+        quantity=0.01,
+        entry_avg_price=100.0,
+        mark_price=100.0,
+        leverage=2.0,
+        status="open",
+        shadow=False,
+        metadata_json={},
+    )
+    db.add_all([state, position])
+    db.commit()
+    db.refresh(position)
+    adapter = FakeTestnetAdapter()
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    try:
+        result = binance_execution_service.execute_order(
+            db,
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="market",
+            quantity=0.02,
+            leverage=2.0,
+            reduce_only=True,
+            idempotency_key="futures-close-too-large-0001",
+            order_metadata={"intent": "close", "position_id": position.id},
+        )
+        assert result["ok"] is False
+        assert result["error"] == "futures_close_quantity_exceeds_open_position"
+        assert adapter.place_calls == 0
+        assert db.execute(select(OrderRecord)).scalars().all() == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_futures_close_rejects_position_symbol_mismatch(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    state = db.get(SystemState, 1)
+    state.market_type = "futures"
+    position = PositionRecord(
+        environment_mode="testnet",
+        market_type="futures",
+        symbol="ETHUSDT",
+        side="long",
+        quantity=0.05,
+        entry_avg_price=100.0,
+        mark_price=100.0,
+        leverage=2.0,
+        status="open",
+        shadow=False,
+        metadata_json={},
+    )
+    db.add_all([state, position])
+    db.commit()
+    db.refresh(position)
+    adapter = FakeTestnetAdapter()
+    monkeypatch.setattr(binance_execution_service, "adapter_for", lambda *args, **kwargs: adapter)
+    try:
+        result = binance_execution_service.execute_order(
+            db,
+            symbol="BTCUSDT",
+            side="SELL",
+            order_type="market",
+            quantity=0.02,
+            leverage=2.0,
+            reduce_only=True,
+            idempotency_key="futures-close-wrong-symbol-0001",
+            order_metadata={"intent": "close", "position_id": position.id},
+        )
+        assert result["ok"] is False
+        assert result["error"] == "futures_close_symbol_position_mismatch"
+        assert adapter.place_calls == 0
     finally:
         db.close()
         engine.dispose()
