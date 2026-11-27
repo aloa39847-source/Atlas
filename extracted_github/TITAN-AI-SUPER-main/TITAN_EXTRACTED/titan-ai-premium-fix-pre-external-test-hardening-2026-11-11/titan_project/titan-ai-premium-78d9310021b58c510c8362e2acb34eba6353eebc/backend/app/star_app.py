@@ -138,7 +138,7 @@ async def system_status(request: Request):
             pass
         try:
             live_status = _get_binance_live_adapter(state_snapshot.get("market_type", "spot"), db).status()
-            live_status["server_live_enabled"] = bool(settings.live_trading_enabled)
+            live_status["server_live_enabled"] = False
             live_status["user_live_confirmed"] = bool(state_snapshot.get("live_confirmed_by_user"))
         except Exception:
             pass
@@ -3126,7 +3126,7 @@ async def binance_live_status(request):
         return J({
             **status,
             "live_blocked": not bool(status.get("execution_ready")),
-            "server_live_enabled": bool(settings.live_trading_enabled),
+            "server_live_enabled": False,
             "user_live_confirmed": bool(state.get("live_confirmed_by_user")),
             "live_start_required": False,
             "live_execution_hard_disabled": True,
