@@ -654,3 +654,87 @@ def test_futures_order_submission_stops_when_position_mode_cannot_be_verified(mo
     assert result["sent_to_exchange"] is False
     assert result["error"] == "futures_position_mode_unavailable"
     assert calls == [("GET", "/fapi/v1/positionSide/dual")]
+
+
+def test_futures_position_mode_cache_is_scoped_by_key_and_expires(monkeypatch):
+    from app.integrations import binance_adapter as module
+
+    monkeypatch.setattr(module, "_FUTURES_POSITION_MODE_CACHE", {})
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    first = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    first_key = ["futures-key-a"]
+    monkeypatch.setattr(first, "_api_key", lambda: first_key[0])
+    monkeypatch.setattr(first, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"dualSidePosition": True}
+    ))
+
+    assert first._get_futures_position_mode() == {
+        "dualSidePosition": True, "cached": False,
+    }
+    assert first._get_futures_position_mode() == {
+        "dualSidePosition": True, "cached": True,
+    }
+    assert len(calls) == 1
+
+    same_key_adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(same_key_adapter, "_api_key", lambda: "futures-key-a")
+    monkeypatch.setattr(same_key_adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"dualSidePosition": False}
+    ))
+    assert same_key_adapter._get_futures_position_mode()["dualSidePosition"] is True
+    assert len(calls) == 1
+
+    other_key_adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(other_key_adapter, "_api_key", lambda: "futures-key-b")
+    monkeypatch.setattr(other_key_adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"dualSidePosition": False}
+    ))
+    assert other_key_adapter._get_futures_position_mode() == {
+        "dualSidePosition": False, "cached": False,
+    }
+    assert len(calls) == 2
+
+    clock[0] += module._FUTURES_POSITION_MODE_TTL_SECONDS + 1
+    assert first._get_futures_position_mode() == {
+        "dualSidePosition": True, "cached": False,
+    }
+    assert len(calls) == 3
+
+
+def test_futures_position_mode_cache_never_caches_missing_key_or_failed_read(monkeypatch):
+    from app.integrations import binance_adapter as module
+
+    monkeypatch.setattr(module, "_FUTURES_POSITION_MODE_CACHE", {})
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: None)
+    calls = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        calls.append(1) or {"dualSidePosition": False}
+    ))
+    adapter._get_futures_position_mode()
+    adapter._get_futures_position_mode()
+    assert len(calls) == 2
+    assert module._FUTURES_POSITION_MODE_CACHE == {}
+
+    monkeypatch.setattr(adapter, "_api_key", lambda: "futures-key")
+    failures = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        failures.append(1) or {"error": "signed_read_failed", "status": 401}
+    ))
+    first = adapter._get_futures_position_mode()
+    second = adapter._get_futures_position_mode()
+    assert first["error"] == "signed_read_failed"
+    assert second["error"] == "signed_read_failed"
+    assert len(failures) == 2
+    assert module._FUTURES_POSITION_MODE_CACHE == {}
