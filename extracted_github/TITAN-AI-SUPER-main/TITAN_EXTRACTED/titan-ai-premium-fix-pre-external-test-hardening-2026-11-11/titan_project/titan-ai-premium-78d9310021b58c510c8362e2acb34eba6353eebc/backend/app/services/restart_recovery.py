@@ -23,8 +23,8 @@ def recover_interrupted_worker(db: Session) -> dict:
     state.live_confirmed_by_user = False
     state.bot_stopped_at = datetime.now(timezone.utc)
     state.bot_stop_reason = "process_restart_recovery"
-    # A Live restart always requires a fresh explicit user approval and a
-    # deliberate emergency-stop reset after reviewing account/order state.
+    # Live execution is hard-disabled in this release. Keep the emergency stop
+    # latched on any interrupted Live-target observer state.
     if target == "live":
         state.emergency_stop = True
     summary = dict(state.status_summary or {})
