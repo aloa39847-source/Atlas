@@ -471,11 +471,40 @@ class BinanceExecutionService:
                             "original_submit_error": error[:240],
                             "exchange_status": lookup_status,
                         }
-                        if executed > 0 and reconciled_status == "filled":
-                            # Fee accounting is finalized by the normal pending
-                            # order synchronizer before the next worker cycle.
-                            meta.setdefault("fee_accounting_status", "pending")
-                            meta.setdefault("fee_accounting_error", "awaiting_read_only_trade_fee_reconciliation")
+                        if executed > 0:
+                            fee_accounting = None
+                            fee_lookup = getattr(adapter, "get_order_fee_quote", None)
+                            if callable(fee_lookup) and record.exchange_order_id:
+                                try:
+                                    fee_accounting = fee_lookup(
+                                        symbol, record.exchange_order_id,
+                                        fills=lookup.get("fills"),
+                                    )
+                                except Exception as fee_exc:
+                                    fee_accounting = {
+                                        "ok": False, "pending": True,
+                                        "error": f"{type(fee_exc).__name__}:{fee_exc}",
+                                    }
+                            if isinstance(fee_accounting, dict) and fee_accounting.get("ok") is True:
+                                try:
+                                    quote_fees = float(fee_accounting.get("fees_paid_usdt", 0) or 0)
+                                    if not math.isfinite(quote_fees) or quote_fees < 0:
+                                        raise ValueError("invalid_usdt_fee")
+                                    record.fees_paid = quote_fees
+                                    record.fee_asset = "USDT"
+                                    meta["fee_accounting_status"] = "complete"
+                                    meta["fee_breakdown"] = fee_accounting.get("fee_breakdown") or {}
+                                    meta.pop("fee_accounting_error", None)
+                                except (TypeError, ValueError, OverflowError):
+                                    meta["fee_accounting_status"] = "pending"
+                                    meta["fee_accounting_error"] = "invalid_fee_accounting_result"
+                            else:
+                                meta["fee_accounting_status"] = "pending"
+                                meta["fee_accounting_error"] = str(
+                                    (fee_accounting or {}).get("error")
+                                    if isinstance(fee_accounting, dict) else
+                                    "read_only_fee_lookup_unavailable"
+                                )[:160]
                         record.metadata_json = meta
                         db.add(record)
                         reconciled = True
