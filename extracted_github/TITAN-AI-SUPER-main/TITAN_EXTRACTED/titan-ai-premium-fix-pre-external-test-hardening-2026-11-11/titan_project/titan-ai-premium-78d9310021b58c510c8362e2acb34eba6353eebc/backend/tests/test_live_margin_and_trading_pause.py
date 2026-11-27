@@ -334,14 +334,14 @@ def test_execution_exception_after_durable_order_record_latches_unknown_and_neve
         engine.dispose()
 
 
-def test_live_trading_is_disabled_by_default_until_explicit_server_override(monkeypatch):
+def test_live_trading_is_hard_disabled_without_server_override(monkeypatch):
     monkeypatch.delenv("TITAN_LIVE_TRADING_ENABLED", raising=False)
     assert Settings().live_trading_enabled is False
 
 
-def test_live_server_environment_flag_can_be_used_as_optional_deployment_override(monkeypatch):
+def test_live_server_environment_flag_cannot_enable_live_trading(monkeypatch):
     monkeypatch.setenv("TITAN_LIVE_TRADING_ENABLED", "true")
-    assert Settings().live_trading_enabled is True
+    assert Settings().live_trading_enabled is False
 
 
 def test_daily_loss_guard_counts_recorded_usdt_commissions(tmp_path):
