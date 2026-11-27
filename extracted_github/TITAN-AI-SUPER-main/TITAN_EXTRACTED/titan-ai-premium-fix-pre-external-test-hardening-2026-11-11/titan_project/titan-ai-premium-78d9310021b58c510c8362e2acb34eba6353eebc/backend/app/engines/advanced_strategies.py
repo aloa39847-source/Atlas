@@ -251,25 +251,71 @@ def evaluate_advanced_candidates(market, bias, timeframe_analyses=None, microstr
     for frame in ("15m", "5m"):
         st = structure(frame)
         sweeps = st.get("liquidity_sweeps", []) if isinstance(st, dict) else []
+        expected_sweep_type = (
+            "sell_side_liquidity_sweep" if ict_direction == "bullish"
+            else "buy_side_liquidity_sweep"
+        )
         for row in sweeps[-3:] if isinstance(sweeps, list) else []:
-            if isinstance(row, dict) and row.get("direction") == ict_direction and row.get("status") in {"swept", "confirmed", "valid"}:
+            if not isinstance(row, dict) or row.get("direction") != ict_direction:
+                continue
+            # Match the actual TechnicalAnalysisEngine contract. Its confirmed
+            # sweep rows contain type/level/wick/close and causal pivot indexes;
+            # they do not contain a synthetic "status" field.
+            level, wick, close = row.get("level"), row.get("wick"), row.get("close")
+            pivot_index = row.get("pivot_index")
+            pivot_confirmed_at = row.get("pivot_confirmed_at")
+            confirmation_index = row.get("confirmation_index")
+            numeric_valid = all(
+                isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                for value in (level, wick, close)
+            )
+            index_valid = all(
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                for value in (pivot_index, pivot_confirmed_at, confirmation_index)
+            )
+            if not (numeric_valid and index_valid and row.get("type") == expected_sweep_type):
+                continue
+            causal = pivot_index < pivot_confirmed_at <= confirmation_index
+            reclaimed = (
+                wick < level and close > level if ict_direction == "bullish"
+                else wick > level and close < level
+            )
+            if causal and reclaimed:
                 sweep_found = True
+
+        # TechnicalAnalysisEngine emits {"type": "CHOCH", "direction": ...}
+        # inside bos_choch and names the corresponding signal "choch_bullish"
+        # or "choch_bearish". A same-direction BOS alone is not treated as MSS.
         shift = st.get("market_structure_shift") if isinstance(st, dict) else None
-        if isinstance(shift, dict) and shift.get("direction") == ict_direction and shift.get("confirmed") is True:
+        if (isinstance(shift, dict) and shift.get("direction") == ict_direction
+                and shift.get("confirmed") is True):
             mss_found = True
-        direction_signals = {
-            "bullish": {"bullish_choch", "bullish_mss", "bullish_market_structure_shift"},
-            "bearish": {"bearish_choch", "bearish_mss", "bearish_market_structure_shift"},
-        }
-        if direction_signals.get(ict_direction, set()) & sig(frame):
+        events = st.get("bos_choch", []) if isinstance(st, dict) else []
+        for event in events[-3:] if isinstance(events, list) else []:
+            if (isinstance(event, dict)
+                    and str(event.get("type") or "").strip().lower() == "choch"
+                    and str(event.get("direction") or "").strip().lower() == ict_direction
+                    and isinstance(event.get("level"), (int, float))
+                    and not isinstance(event.get("level"), bool)
+                    and math.isfinite(float(event.get("level")))):
+                mss_found = True
+        if f"choch_{ict_direction}" in sig(frame):
             mss_found = True
+
         gaps = st.get("fair_value_gaps", []) if isinstance(st, dict) else []
         for row in gaps[-3:] if isinstance(gaps, list) else []:
-            if isinstance(row, dict) and row.get("direction") == ict_direction and row.get("status") == "open":
+            if not isinstance(row, dict) or row.get("direction") != ict_direction or row.get("status") != "open":
+                continue
+            lower, upper = row.get("lower"), row.get("upper")
+            if (isinstance(lower, (int, float)) and not isinstance(lower, bool)
+                    and isinstance(upper, (int, float)) and not isinstance(upper, bool)
+                    and math.isfinite(float(lower)) and math.isfinite(float(upper))
+                    and 0 < float(lower) < float(upper)):
                 fvg_found = True
                 if row.get("ote_overlap") is True:
                     ote_found = True
-        if ("bullish_displacement" if ict_direction == "bullish" else "bearish_displacement") in sig(frame):
+        if f"{ict_direction}_displacement" in sig(frame):
             displacement_found = True
         ctx_ict = ctx.get("ict", {}) if isinstance(ctx, dict) else {}
         if isinstance(ctx_ict, dict):

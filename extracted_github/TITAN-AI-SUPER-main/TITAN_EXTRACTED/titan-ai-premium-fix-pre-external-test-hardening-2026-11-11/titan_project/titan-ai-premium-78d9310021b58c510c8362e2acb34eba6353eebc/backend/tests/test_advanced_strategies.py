@@ -93,9 +93,18 @@ def test_ict_model_requires_multiple_confluences_and_uses_closed_structure_conte
         "1d": _tf("bullish"),
         "4h": _tf("bullish"),
         "1h": _tf("bullish"),
-        "15m": _tf("bullish", ["bullish_choch", "bullish_displacement"], structure={
-            "liquidity_sweeps": [{"direction": "bullish", "status": "confirmed"}],
-            "fair_value_gaps": [{"direction": "bullish", "status": "open", "ote_overlap": True}],
+        "15m": _tf("bullish", ["choch_bullish", "bullish_displacement"], structure={
+            "liquidity_sweeps": [{
+                "type": "sell_side_liquidity_sweep", "direction": "bullish",
+                "level": 100.0, "wick": 99.0, "close": 101.0,
+                "pivot_index": 5, "pivot_confirmed_at": 8,
+                "confirmation_index": 9,
+            }],
+            "bos_choch": [{"type": "CHOCH", "direction": "bullish", "level": 101.0}],
+            "fair_value_gaps": [{
+                "direction": "bullish", "lower": 100.5, "upper": 101.0,
+                "status": "open", "ote_overlap": True,
+            }],
         }),
         "5m": _tf("bullish"),
     }
