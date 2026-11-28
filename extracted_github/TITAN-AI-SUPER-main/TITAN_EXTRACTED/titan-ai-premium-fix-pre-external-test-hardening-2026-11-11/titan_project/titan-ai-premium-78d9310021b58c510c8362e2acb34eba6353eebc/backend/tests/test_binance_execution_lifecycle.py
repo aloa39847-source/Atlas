@@ -666,6 +666,17 @@ def test_core_control_refuses_live_start_even_when_flags_are_enabled(tmp_path, m
         db.refresh(state)
         assert state.account_target != "live"
         assert state.bot_run_state == "stopped"
+
+        state.account_target = "live"
+        state.environment_mode = "live"
+        state.live_confirmed_by_user = True
+        db.add(state)
+        db.commit()
+        try:
+            core_service.start_bot(db)
+            raise AssertionError("Persisted Live target unexpectedly accepted")
+        except ValueError as exc:
+            assert str(exc) == "live_trading_hard_disabled_in_this_release"
     finally:
         db.close()
         engine.dispose()
