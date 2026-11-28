@@ -648,6 +648,7 @@ def test_live_execution_is_hard_disabled_even_when_server_and_user_flags_are_tru
 
 
 def test_core_control_refuses_live_start_even_when_flags_are_enabled(tmp_path, monkeypatch):
+    from app.core.config import settings
     from app.services.core_service import core_service
 
     engine, db = _session(tmp_path)
@@ -655,7 +656,7 @@ def test_core_control_refuses_live_start_even_when_flags_are_enabled(tmp_path, m
     state.live_trading_enabled = True
     db.add(state)
     db.commit()
-    monkeypatch.setattr(execution_module.settings, "live_trading_enabled", True)
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
     try:
         try:
             core_service.start_bot(db, account_target="live", live_confirm=True)
