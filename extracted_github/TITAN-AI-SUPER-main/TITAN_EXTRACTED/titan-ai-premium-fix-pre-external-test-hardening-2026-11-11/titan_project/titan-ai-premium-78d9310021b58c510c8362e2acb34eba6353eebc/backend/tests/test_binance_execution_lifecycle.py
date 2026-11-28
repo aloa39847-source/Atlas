@@ -654,6 +654,9 @@ def test_core_control_refuses_live_start_even_when_flags_are_enabled(tmp_path, m
     engine, db = _session(tmp_path)
     state = db.get(SystemState, 1)
     state.live_trading_enabled = True
+    state.account_target = "demo"
+    state.environment_mode = "demo"
+    state.bot_run_state = "stopped"
     db.add(state)
     db.commit()
     monkeypatch.setattr(settings, "live_trading_enabled", True)
