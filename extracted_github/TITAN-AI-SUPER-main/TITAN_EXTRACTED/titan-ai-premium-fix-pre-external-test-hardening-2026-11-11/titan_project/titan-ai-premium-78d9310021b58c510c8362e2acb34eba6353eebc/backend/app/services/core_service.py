@@ -521,11 +521,8 @@ class TitanCoreService:
             self.set_state(db, account_target="live", live_confirm=True)
             s = self._state(db)
         target = str(getattr(s, "account_target", "demo") or "demo").lower()
-        if target == "live" and (
-            not bool(settings.live_trading_enabled)
-            or not bool(getattr(s, "live_trading_enabled", False))
-        ):
-            raise ValueError("live_trading_disabled_by_server")
+        if target == "live":
+            raise ValueError("live_trading_hard_disabled_in_this_release")
         market = str(s.market_type or "spot").lower()
         if target not in {"demo", "testnet", "live"}:
             raise ValueError("unsupported_account_target")
