@@ -510,8 +510,8 @@ class TitanCoreService:
             target = str(account_target).strip().lower()
             if target not in {"demo", "testnet", "live"}:
                 raise ValueError("account_target_must_be_demo_testnet_or_live")
-            if target == "live" and not bool(settings.live_trading_enabled):
-                raise ValueError("live_trading_disabled_by_server")
+            if target == "live":
+                raise ValueError("live_trading_hard_disabled_in_this_release")
             self.set_state(
                 db, account_target=target,
                 live_confirm=(live_confirm if target == "live" else None),
