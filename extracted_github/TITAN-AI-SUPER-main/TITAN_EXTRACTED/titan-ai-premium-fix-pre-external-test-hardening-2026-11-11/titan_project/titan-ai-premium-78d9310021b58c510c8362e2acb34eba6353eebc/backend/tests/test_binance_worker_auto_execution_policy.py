@@ -52,8 +52,11 @@ def test_retired_testnet_patch_helpers_cannot_reenable_direct_order_or_close_rou
         "apply_safe_testnet_close.py",
     )
     script_dir = Path(__file__).resolve().parents[4] / ".github" / "scripts"
-    for name in scripts:
-        source = (script_dir / name).read_text(encoding="utf-8")
+    project_root = Path(__file__).resolve().parents[2]
+    targets = [script_dir / name for name in scripts]
+    targets.append(project_root / "_patch_ui.py")
+    for path in targets:
+        source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         assert "DISABLED:" in source
         assert any(isinstance(node, ast.Raise) for node in ast.walk(tree))
