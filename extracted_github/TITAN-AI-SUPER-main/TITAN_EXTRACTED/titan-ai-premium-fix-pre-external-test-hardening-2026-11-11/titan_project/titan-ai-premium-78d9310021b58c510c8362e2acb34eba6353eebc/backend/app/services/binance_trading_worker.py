@@ -790,7 +790,7 @@ def run(interval_seconds: int = 60, stop_event: threading.Event | None = None) -
     if target == "live":
         # Hard release boundary: no confirmation flag or persisted state can
         # authorize a real-money worker in this build.
-        raise RuntimeError("live_trading_disabled_by_server")
+        raise RuntimeError("live_trading_hard_disabled_in_this_release")
 
     # Verify the selected account connection and balances before reporting
     # the worker as running to the API/UI.
