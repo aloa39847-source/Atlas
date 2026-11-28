@@ -603,6 +603,8 @@ def test_futures_entry_persists_and_passes_expected_position_leg(
 
 
 def test_live_execution_is_hard_disabled_even_when_server_and_user_flags_are_true(tmp_path, monkeypatch):
+    from app.services import binance_execution as execution_module
+
     engine, db = _session(tmp_path)
     state = db.get(SystemState, 1)
     state.account_target = "live"
