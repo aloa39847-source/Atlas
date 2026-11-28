@@ -411,7 +411,7 @@ def test_execution_service_rejects_live_without_explicit_user_confirmation(monke
     )
     assert result["ok"] is False
     assert result["sent_to_exchange"] is False
-    assert result["error"] == "live_requires_explicit_user_confirmation"
+    assert result["error"] == "live_trading_hard_disabled_in_this_release"
 
 
 def test_live_adapter_transport_allows_signed_read_only_account_get(monkeypatch):
