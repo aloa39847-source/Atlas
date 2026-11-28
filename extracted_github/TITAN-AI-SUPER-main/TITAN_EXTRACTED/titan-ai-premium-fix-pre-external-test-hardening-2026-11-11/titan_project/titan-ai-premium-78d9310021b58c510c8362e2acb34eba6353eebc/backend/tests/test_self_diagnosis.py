@@ -237,3 +237,94 @@ def test_news_source_diagnostics_rejects_duplicate_or_insecure_feed_urls(monkeyp
     assert result["status"] == "error"
     assert result["invalid_url_count"] == 1
     assert result["duplicate_urls"] == ["https://official.example/rss"]
+
+
+def test_binance_diagnostics_checks_market_scoped_futures_credentials_and_permission(monkeypatch):
+    from app.integrations import binance_adapter
+    from app.services import credentials
+    from app.services.core_service import core_service
+
+    monkeypatch.setattr(core_service, "get_state", lambda db: {"market_type": "futures"})
+    monkeypatch.setattr(credentials, "load_testnet_credentials", lambda market: {
+        "configured": market == "futures",
+    })
+
+    configs = []
+
+    class ConnectedFuturesAdapter:
+        def __init__(self, config):
+            configs.append(config)
+            self.config = config
+            assert config.enabled is True
+            assert config.environment == "testnet"
+
+        def status(self):
+            assert self.config.market == "futures"
+            return {
+                "connected": True,
+                "account_can_trade": True,
+                "api_key_trade_permission_verified": True,
+                "execution_ready": True,
+                "execution_readiness_check": "ok",
+            }
+
+    monkeypatch.setattr(binance_adapter, "BinanceTestnetAdapter", ConnectedFuturesAdapter)
+    result = SelfDiagnosisEngine()._check_binance_testnet(object())
+
+    assert result["status"] == "ok"
+    assert result["selected_market"] == "futures"
+    assert result["markets"]["spot"]["status"] == "not_configured"
+    assert result["markets"]["futures"]["status"] == "ready"
+    assert len(configs) == 1
+    assert configs[0].api_key_ref == "stored:testnet:futures:api_key"
+    assert configs[0].api_secret_ref == "stored:testnet:futures:api_secret"
+
+
+def test_binance_diagnostics_warns_when_selected_market_trade_scope_is_unverified(monkeypatch):
+    from app.integrations import binance_adapter
+    from app.services import credentials
+    from app.services.core_service import core_service
+
+    monkeypatch.setattr(core_service, "get_state", lambda db: {"market_type": "spot"})
+    monkeypatch.setattr(credentials, "load_testnet_credentials", lambda market: {
+        "configured": market == "spot",
+    })
+
+    class ReadOnlySpotAdapter:
+        def __init__(self, config):
+            assert config.enabled is True
+            assert config.market == "spot"
+            assert config.api_key_ref == "stored:testnet:spot:api_key"
+
+        def status(self):
+            return {
+                "connected": True,
+                "account_can_trade": True,
+                "api_key_trade_permission_verified": None,
+                "execution_ready": False,
+                "execution_readiness_check": "api_key_trade_permission_requires_test_order_validation",
+            }
+
+    monkeypatch.setattr(binance_adapter, "BinanceTestnetAdapter", ReadOnlySpotAdapter)
+    result = SelfDiagnosisEngine()._check_binance_testnet(object())
+
+    assert result["status"] == "warning"
+    assert result["selected_market"] == "spot"
+    assert result["markets"]["spot"]["connected"] is True
+    assert result["markets"]["spot"]["execution_ready"] is False
+    assert "TRADE permission" in result["detail"]
+
+
+def test_binance_diagnostics_warns_when_selected_market_credentials_are_missing(monkeypatch):
+    from app.services import credentials
+    from app.services.core_service import core_service
+
+    monkeypatch.setattr(core_service, "get_state", lambda db: {"market_type": "futures"})
+    monkeypatch.setattr(credentials, "load_testnet_credentials", lambda market: {"configured": False})
+    result = SelfDiagnosisEngine()._check_binance_testnet(object())
+
+    assert result["status"] == "warning"
+    assert result["selected_market"] == "futures"
+    assert result["markets"]["spot"]["configured"] is False
+    assert result["markets"]["futures"]["configured"] is False
+    assert "Futures Testnet credentials" in result["detail"]
