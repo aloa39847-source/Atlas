@@ -41,6 +41,10 @@ def test_binance_testnet_futures_order_uses_guarded_endpoint_and_leverage(monkey
 
     def fake_request(method, path, signed=False, params=None):
         calls.append((method, path, dict(params or {})))
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         if path == "/fapi/v2/account":
             return {"canTrade": True, "availableBalance": "1000"}
         if path == "/fapi/v1/openOrders":
@@ -81,6 +85,8 @@ def test_binance_testnet_futures_enforces_800_usdt_notional_cap(monkeypatch):
 
     def fake_request(method, path, signed=False, params=None):
         calls.append(path)
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         if path == "/fapi/v1/openOrders":
             return []
         if path == "/fapi/v2/account":
@@ -258,6 +264,8 @@ def test_futures_reduce_only_close_skips_margin_and_leverage_setup(monkeypatch):
     calls = []
     def fake_request(method, path, signed=False, params=None):
         calls.append((method, path, dict(params or {})))
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         return {"orderId": 456, "status": "FILLED"}
     monkeypatch.setattr(adapter, "_request", fake_request)
 
@@ -278,6 +286,8 @@ def test_futures_open_order_is_blocked_if_exchange_refuses_isolated_margin(monke
 
     def fake_request(method, path, signed=False, params=None):
         calls.append(path)
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         if path == "/fapi/v2/account":
             return {"canTrade": True, "availableBalance": "1000"}
         if path == "/fapi/v1/openOrders":
