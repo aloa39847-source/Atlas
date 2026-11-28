@@ -360,3 +360,35 @@ def test_base_binance_adapter_cannot_bypass_live_release_lock(monkeypatch):
     assert result["sent_to_exchange"] is False
     assert result["error"] == "live_trading_hard_disabled_in_this_release"
     assert calls == []
+
+
+def test_live_status_never_reports_execution_ready_even_with_all_flags_enabled(monkeypatch):
+    from app.integrations.binance_adapter import BinanceConfig, BinanceLiveAdapter
+    from app.core.config import settings
+
+    adapter = BinanceLiveAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+        live_confirmed_by_user=True, live_worker_ready=True,
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "read-only-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "read-only-secret")
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
+    monkeypatch.setattr(adapter, "_validate_live_api_restrictions", lambda payload: None)
+
+    def fake_request(method, path, signed=False, params=None):
+        if path == "/api/v3/account":
+            return {"balances": [], "canTrade": True}
+        if path == "/sapi/v1/account/apiRestrictions":
+            return {"ipRestrict": True, "ipList": ["203.0.113.10"],
+                    "enableWithdrawals": False, "enableInternalTransfer": False,
+                    "permitsUniversalTransfer": False, "enableUniversalTransfer": False}
+        raise AssertionError(f"Unexpected Live request: {path}")
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.status()
+
+    assert result["connected"] is True
+    assert result["trade_permission"] is True
+    assert result["live_blocked"] is True
+    assert result["live_execution_hard_disabled"] is True
+    assert result["execution_ready"] is False
