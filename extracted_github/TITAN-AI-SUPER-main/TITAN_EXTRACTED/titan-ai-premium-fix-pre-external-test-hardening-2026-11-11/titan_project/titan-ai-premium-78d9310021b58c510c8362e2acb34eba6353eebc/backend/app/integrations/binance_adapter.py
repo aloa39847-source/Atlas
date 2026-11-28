@@ -499,22 +499,22 @@ class BinanceTestnetAdapter:
         return None
 
     def _execution_ready(self) -> dict[str, Any] | None:
-        if not self.config.enabled:
-            return {"ok": False, "sent_to_exchange": False, "error": "binance_execution_disabled"}
         if self.config.environment not in {"testnet", "live"}:
             return {"ok": False, "sent_to_exchange": False, "error": "unsupported_binance_environment"}
         if self.config.market not in {"spot", "futures"}:
             return {"ok": False, "sent_to_exchange": False, "error": "unsupported_market"}
-        if not self._api_key() or not self._api_secret():
-            return {"ok": False, "sent_to_exchange": False,
-                    "error": "live_credentials_missing" if self.config.environment == "live" else "testnet_credentials_missing"}
+        # Hard release boundary applies to every adapter instance, not only the
+        # Live subclass or the supervised worker. Live remains read-only.
         if self.config.environment == "live":
-            if not settings.live_trading_enabled:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_trading_disabled_by_server"}
-            if not self.config.live_confirmed_by_user:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
-            if not self.config.live_worker_ready:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_supervised_worker_required"}
+            return {
+                "ok": False,
+                "sent_to_exchange": False,
+                "error": "live_trading_hard_disabled_in_this_release",
+            }
+        if not self.config.enabled:
+            return {"ok": False, "sent_to_exchange": False, "error": "binance_execution_disabled"}
+        if not self._api_key() or not self._api_secret():
+            return {"ok": False, "sent_to_exchange": False, "error": "testnet_credentials_missing"}
         return None
 
     def _symbol_filters(self, symbol: str) -> dict[str, float]:
