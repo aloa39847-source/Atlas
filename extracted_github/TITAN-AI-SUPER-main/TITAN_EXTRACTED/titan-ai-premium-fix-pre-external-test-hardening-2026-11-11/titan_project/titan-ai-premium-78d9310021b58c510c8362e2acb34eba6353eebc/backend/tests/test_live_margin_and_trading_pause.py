@@ -541,7 +541,7 @@ def test_live_approval_is_revoked_by_emergency_stop(tmp_path):
         engine.dispose()
 
 
-def test_core_live_start_requires_explicit_confirmation_even_when_server_enabled(tmp_path, monkeypatch):
+def test_core_live_start_is_hard_disabled_even_without_confirmation(tmp_path, monkeypatch):
     import pytest
 
     monkeypatch.setattr(settings, "live_trading_enabled", True)
@@ -556,7 +556,7 @@ def test_core_live_start_requires_explicit_confirmation_even_when_server_enabled
         with pytest.raises(ValueError, match="live_trading_hard_disabled_in_this_release"):
             core_service.start_bot(db, account_target="live", live_confirm=False)
         state = db.get(SystemState, 1)
-        assert state.account_target == "live"
+        assert state.account_target == "demo"
         assert state.live_confirmed_by_user is False
         assert state.bot_run_state == "stopped"
     finally:
