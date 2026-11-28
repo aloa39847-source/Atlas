@@ -37,6 +37,28 @@ def test_live_worker_is_hard_disabled_before_any_database_or_exchange_access(mon
             "SessionLocal",
             lambda: (_ for _ in ()).throw(AssertionError("Live worker must not open a database session")),
         )
-        with pytest.raises(RuntimeError, match="live_trading_disabled_by_server"):
+        with pytest.raises(RuntimeError, match="live_trading_hard_disabled_in_this_release"):
             binance_trading_worker.run(interval_seconds=60)
 
+
+
+def test_retired_testnet_patch_helpers_cannot_reenable_direct_order_or_close_routes():
+    import ast
+    from pathlib import Path
+
+    scripts = (
+        "apply_testnet_order_reconciliation.py",
+        "apply_testnet_idempotency.py",
+        "apply_safe_testnet_close.py",
+    )
+    script_dir = Path(__file__).resolve().parents[2] / ".github" / "scripts"
+    for name in scripts:
+        source = (script_dir / name).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        assert "DISABLED:" in source
+        assert any(isinstance(node, ast.Raise) for node in ast.walk(tree))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in {
+                    "write_text", "write_bytes", "place_order", "close_position",
+                }
