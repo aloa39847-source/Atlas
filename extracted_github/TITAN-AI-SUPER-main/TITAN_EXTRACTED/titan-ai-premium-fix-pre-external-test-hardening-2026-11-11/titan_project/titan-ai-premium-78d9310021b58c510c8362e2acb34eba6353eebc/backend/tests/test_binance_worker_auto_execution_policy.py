@@ -29,23 +29,50 @@ def test_testnet_worker_passes_policy_gate_and_reaches_preflight(monkeypatch):
         binance_trading_worker.run(interval_seconds=60)
 
 
-def test_live_worker_requires_explicit_user_confirmation_before_any_exchange_access(monkeypatch):
-    monkeypatch.setattr(binance_trading_worker, "_read_control", lambda: _control("live", False))
-    monkeypatch.setattr(
-        binance_trading_worker.dbmod,
-        "SessionLocal",
-        lambda: (_ for _ in ()).throw(AssertionError("No database/exchange access before explicit approval")),
-    )
-    with pytest.raises(RuntimeError, match="live_requires_explicit_user_confirmation"):
-        binance_trading_worker.run(interval_seconds=60)
+def test_live_worker_is_hard_disabled_before_any_database_or_exchange_access(monkeypatch):
+    for confirmed in (False, True):
+        monkeypatch.setattr(binance_trading_worker, "_read_control", lambda confirmed=confirmed: _control("live", confirmed))
+        monkeypatch.setattr(
+            binance_trading_worker.dbmod,
+            "SessionLocal",
+            lambda: (_ for _ in ()).throw(AssertionError("Live worker must not open a database session")),
+        )
+        with pytest.raises(RuntimeError, match="live_trading_hard_disabled_in_this_release"):
+            binance_trading_worker.run(interval_seconds=60)
 
 
-def test_live_worker_passes_policy_gate_only_after_explicit_user_confirmation(monkeypatch):
-    monkeypatch.setattr(binance_trading_worker, "_read_control", lambda: _control("live", True))
-    monkeypatch.setattr(
-        binance_trading_worker.dbmod,
-        "SessionLocal",
-        lambda: (_ for _ in ()).throw(AssertionError("Approved Live worker must proceed to preflight")),
+
+def test_retired_testnet_patch_helpers_cannot_reenable_direct_order_or_close_routes():
+    import ast
+    from pathlib import Path
+
+    scripts = (
+        "apply_testnet_order_reconciliation.py",
+        "apply_testnet_idempotency.py",
+        "apply_safe_testnet_close.py",
     )
-    with pytest.raises(AssertionError, match="proceed to preflight"):
-        binance_trading_worker.run(interval_seconds=60)
+    script_dir = Path(__file__).resolve().parents[4] / ".github" / "scripts"
+    project_root = Path(__file__).resolve().parents[2]
+    # Outer repository-only migration helpers are not shipped in the
+    # standalone project ZIP; validate them when present, but always validate
+    # the in-project legacy UI patch helper.
+    targets = [script_dir / name for name in scripts if (script_dir / name).is_file()]
+    targets.append(project_root / "_patch_ui.py")
+    env_example = (project_root / ".env.example").read_text(encoding="utf-8")
+    for credential_name in (
+        "BINANCE_API_KEY", "BINANCE_API_SECRET",
+        "BINANCE_TESTNET_API_KEY", "BINANCE_TESTNET_API_SECRET",
+        "BINANCE_TESTNET_FUTURES_API_KEY", "BINANCE_TESTNET_FUTURES_API_SECRET",
+    ):
+        assert f"{credential_name}=" not in env_example
+    assert "authenticated TITAN dashboard" in env_example
+    for path in targets:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        assert "DISABLED:" in source
+        assert any(isinstance(node, ast.Raise) for node in ast.walk(tree))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in {
+                    "write_text", "write_bytes", "place_order", "close_position",
+                }

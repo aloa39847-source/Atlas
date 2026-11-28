@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.integrations.binance_adapter import BinanceConfig, BinanceTestnetAdapter, BinanceLiveAdapter
-from app.models.entities import OrderRecord, SystemState
+from app.models.entities import OrderRecord, PositionRecord, SystemState
 from app.services.credentials import load_binance_credentials, load_testnet_credentials
 from app.services.audit import log_event
 
@@ -84,11 +84,9 @@ class BinanceExecutionService:
         if bool(state.emergency_stop) and not allow_emergency_exit:
             return {"ok": False, "ready": False, "error": "emergency_stop_active"}
         target = str(getattr(state, "account_target", "demo") or "demo").lower()
-        if target == "live" and (
-            not bool(settings.live_trading_enabled)
-            or not bool(getattr(state, "live_trading_enabled", False))
-        ):
-            return {"ok": False, "ready": False, "error": "live_trading_disabled_by_server",
+        if target == "live":
+            return {"ok": False, "ready": False,
+                    "error": "live_trading_hard_disabled_in_this_release",
                     "orders_submitted": False}
         record = None
         try:
@@ -205,15 +203,9 @@ class BinanceExecutionService:
         environment = target
         if target not in {"testnet", "live"}:
             return {"ok": False, "sent_to_exchange": False, "error": "external_execution_requires_binance_account"}
-        if target == "live" and (
-            not bool(settings.live_trading_enabled)
-            or not bool(getattr(state, "live_trading_enabled", False))
-        ):
+        if target == "live":
             return {"ok": False, "sent_to_exchange": False,
-                    "error": "live_trading_disabled_by_server"}
-        if target == "live" and not bool(getattr(state, "live_confirmed_by_user", False)):
-            return {"ok": False, "sent_to_exchange": False,
-                    "error": "live_requires_explicit_user_confirmation"}
+                    "error": "live_trading_hard_disabled_in_this_release"}
         if not isinstance(idempotency_key, str) or len(idempotency_key.strip()) < 8:
             return {"ok": False, "sent_to_exchange": False, "error": "valid_idempotency_key_required"}
         # Idempotency lookup must precede worker/emergency-stop gates: a replay
@@ -231,7 +223,10 @@ class BinanceExecutionService:
                 "status": existing.status,
             }
 
-        is_position_exit = bool(reduce_only) or (order_metadata or {}).get("intent") == "close"
+        if order_metadata is not None and not isinstance(order_metadata, dict):
+            return {"ok": False, "sent_to_exchange": False, "error": "order_metadata_must_be_object"}
+        intent = str((order_metadata or {}).get("intent") or "").strip().lower()
+        is_position_exit = bool(reduce_only) or intent == "close"
         if state.bot_run_state not in {"running", "analyzing", "executing"} and not is_position_exit:
             return {"ok": False, "sent_to_exchange": False, "error": "master_worker_not_running"}
         if state.emergency_stop and not is_position_exit:
@@ -246,11 +241,69 @@ class BinanceExecutionService:
                 or (px is not None and (not math.isfinite(px) or px <= 0))):
             return {"ok": False, "sent_to_exchange": False, "error": "invalid_order_numeric_input"}
 
-        if order_metadata is not None and not isinstance(order_metadata, dict):
-            return {"ok": False, "sent_to_exchange": False, "error": "order_metadata_must_be_object"}
-
         if bool((state.risk_limits or {}).get("trading_paused", False)) and not is_position_exit:
             return {"ok": False, "sent_to_exchange": False, "error": "new_trade_entries_paused"}
+
+        # Resolve Futures position ownership before creating a durable order.
+        # In Hedge Mode the exchange requires the exact LONG/SHORT leg; guessing
+        # from BUY/SELL alone can close the opposite exposure.
+        futures_position_side: str | None = None
+        if market == "futures":
+            normalized_order_side = str(side or "").strip().upper()
+            if normalized_order_side not in {"BUY", "SELL"}:
+                return {"ok": False, "sent_to_exchange": False, "error": "invalid_futures_order_side"}
+            if intent == "close":
+                if not reduce_only:
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_position_close_requires_reduce_only"}
+                raw_position_id = (order_metadata or {}).get("position_id")
+                if isinstance(raw_position_id, bool) or raw_position_id is None:
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_position_id_required_for_close"}
+                try:
+                    position_id = int(raw_position_id)
+                except (TypeError, ValueError, OverflowError):
+                    return {"ok": False, "sent_to_exchange": False, "error": "invalid_futures_position_id"}
+                position = db.get(PositionRecord, position_id)
+                if (
+                    position is None
+                    or position.shadow is not False
+                    or position.status != "open"
+                    or position.environment_mode != target
+                    or position.market_type != "futures"
+                ):
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_position_not_open_or_environment_mismatch"}
+                try:
+                    open_position_quantity = float(position.quantity)
+                except (TypeError, ValueError, OverflowError):
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_position_quantity_invalid"}
+                if (
+                    not math.isfinite(open_position_quantity)
+                    or open_position_quantity <= 0
+                    or qty > open_position_quantity + 1e-10
+                ):
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_quantity_exceeds_open_position"}
+                if str(position.symbol).replace("/", "").upper() != str(symbol).replace("/", "").upper():
+                    return {"ok": False, "sent_to_exchange": False, "error": "futures_close_symbol_position_mismatch"}
+                if position.side == "long":
+                    futures_position_side = "LONG"
+                elif position.side == "short":
+                    futures_position_side = "SHORT"
+                else:
+                    return {"ok": False, "sent_to_exchange": False, "error": "unsupported_futures_position_side"}
+                expected_close_side = "SELL" if futures_position_side == "LONG" else "BUY"
+                if normalized_order_side != expected_close_side:
+                    return {
+                        "ok": False, "sent_to_exchange": False,
+                        "error": "futures_close_order_side_position_mismatch",
+                        "position_side": futures_position_side,
+                        "expected_order_side": expected_close_side,
+                    }
+            elif reduce_only:
+                # Explicit reduce-only callers without a position record may
+                # still close a net position in One-way Mode. Hedge Mode will
+                # only accept this inferred leg if the caller's direction agrees.
+                futures_position_side = "LONG" if normalized_order_side == "SELL" else "SHORT"
+            else:
+                futures_position_side = "LONG" if normalized_order_side == "BUY" else "SHORT"
 
         # Enforce the configured notional cap at the final execution boundary.
         # Position-reducing exits are exempt so safety controls never block a close.
@@ -320,6 +373,7 @@ class BinanceExecutionService:
                     **(order_metadata or {}),
                     "account_target": target, "leverage": lev,
                     "reduce_only": bool(reduce_only),
+                    **({"futures_position_side": futures_position_side} if futures_position_side else {}),
                 },
             )
             db.add(record)
@@ -327,11 +381,14 @@ class BinanceExecutionService:
             db.refresh(record)
 
             try:
-                result = adapter.place_order(
-                    symbol=symbol, side=side, order_type=order_type, quantity=qty,
-                    price=px, leverage=lev, reduce_only=bool(reduce_only),
-                    idempotency_key=key,
-                )
+                adapter_order_kwargs = {
+                    "symbol": symbol, "side": side, "order_type": order_type,
+                    "quantity": qty, "price": px, "leverage": lev,
+                    "reduce_only": bool(reduce_only), "idempotency_key": key,
+                }
+                if market == "futures":
+                    adapter_order_kwargs["position_side"] = futures_position_side
+                result = adapter.place_order(**adapter_order_kwargs)
             except Exception as submit_exc:
                 # The adapter may raise after the HTTP request was written.
                 # Route this through the same read-only client-ID reconciliation

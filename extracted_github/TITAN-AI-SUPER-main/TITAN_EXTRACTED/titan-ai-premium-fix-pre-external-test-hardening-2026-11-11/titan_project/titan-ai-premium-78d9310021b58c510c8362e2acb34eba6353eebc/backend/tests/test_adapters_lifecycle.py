@@ -41,6 +41,10 @@ def test_binance_testnet_futures_order_uses_guarded_endpoint_and_leverage(monkey
 
     def fake_request(method, path, signed=False, params=None):
         calls.append((method, path, dict(params or {})))
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         if path == "/fapi/v2/account":
             return {"canTrade": True, "availableBalance": "1000"}
         if path == "/fapi/v1/openOrders":
@@ -81,6 +85,8 @@ def test_binance_testnet_futures_enforces_800_usdt_notional_cap(monkeypatch):
 
     def fake_request(method, path, signed=False, params=None):
         calls.append(path)
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         if path == "/fapi/v1/openOrders":
             return []
         if path == "/fapi/v2/account":
@@ -258,6 +264,8 @@ def test_futures_reduce_only_close_skips_margin_and_leverage_setup(monkeypatch):
     calls = []
     def fake_request(method, path, signed=False, params=None):
         calls.append((method, path, dict(params or {})))
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         return {"orderId": 456, "status": "FILLED"}
     monkeypatch.setattr(adapter, "_request", fake_request)
 
@@ -278,6 +286,8 @@ def test_futures_open_order_is_blocked_if_exchange_refuses_isolated_margin(monke
 
     def fake_request(method, path, signed=False, params=None):
         calls.append(path)
+        if path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": False}
         if path == "/fapi/v2/account":
             return {"canTrade": True, "availableBalance": "1000"}
         if path == "/fapi/v1/openOrders":
@@ -303,3 +313,82 @@ def test_futures_open_order_is_blocked_if_exchange_refuses_isolated_margin(monke
     assert "/fapi/v1/marginType" in calls
     assert "/fapi/v1/leverage" not in calls
     assert "/fapi/v1/order" not in calls
+
+
+def test_live_adapter_hard_blocks_all_exchange_writes_in_this_release(monkeypatch):
+    from app.integrations.binance_adapter import BinanceConfig, BinanceLiveAdapter
+
+    adapter = BinanceLiveAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+    ))
+    calls = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"ok": True}
+    ))
+
+    result = adapter.place_order(
+        "BTCUSDT", "BUY", "MARKET", 0.001,
+        idempotency_key="live-hard-lock-order-0001",
+    )
+    cancel = adapter.cancel_order("BTCUSDT", order_id=123)
+
+    assert result["ok"] is False
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "live_trading_hard_disabled_in_this_release"
+    assert cancel["sent_to_exchange"] is False
+    assert cancel["error"] == "live_trading_hard_disabled_in_this_release"
+    assert calls == []
+
+
+def test_base_binance_adapter_cannot_bypass_live_release_lock(monkeypatch):
+    from app.integrations.binance_adapter import BinanceConfig, BinanceTestnetAdapter
+
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="live", market="futures",
+    ))
+    calls = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"ok": True}
+    ))
+
+    result = adapter.place_order(
+        "BTCUSDT", "BUY", "MARKET", 0.001,
+        idempotency_key="base-adapter-live-hard-lock-0001",
+    )
+
+    assert result["ok"] is False
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "live_trading_hard_disabled_in_this_release"
+    assert calls == []
+
+
+def test_live_status_never_reports_execution_ready_even_with_all_flags_enabled(monkeypatch):
+    from app.integrations.binance_adapter import BinanceConfig, BinanceLiveAdapter
+    from app.core.config import settings
+
+    adapter = BinanceLiveAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+        live_confirmed_by_user=True, live_worker_ready=True,
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: "read-only-key")
+    monkeypatch.setattr(adapter, "_api_secret", lambda: "read-only-secret")
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
+    monkeypatch.setattr(adapter, "_validate_live_api_restrictions", lambda payload: None)
+
+    def fake_request(method, path, signed=False, params=None):
+        if path == "/api/v3/account":
+            return {"balances": [], "canTrade": True}
+        if path == "/sapi/v1/account/apiRestrictions":
+            return {"ipRestrict": True, "ipList": ["203.0.113.10"],
+                    "enableWithdrawals": False, "enableInternalTransfer": False,
+                    "permitsUniversalTransfer": False, "enableUniversalTransfer": False}
+        raise AssertionError(f"Unexpected Live request: {path}")
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.status()
+
+    assert result["connected"] is True
+    assert result["trade_permission"] is True
+    assert result["live_blocked"] is True
+    assert result["live_execution_hard_disabled"] is True
+    assert result["execution_ready"] is False

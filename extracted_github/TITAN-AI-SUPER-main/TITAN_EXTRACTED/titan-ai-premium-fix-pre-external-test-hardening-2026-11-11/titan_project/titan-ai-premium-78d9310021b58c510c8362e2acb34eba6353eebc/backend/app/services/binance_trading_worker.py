@@ -787,8 +787,10 @@ def run(interval_seconds: int = 60, stop_event: threading.Event | None = None) -
     target, market = control["account_target"], control["market_type"]
     if target not in {"testnet", "live"}:
         raise RuntimeError("binance_worker_requires_testnet_or_live_account_target")
-    if target == "live" and not control["live_confirmed_by_user"]:
-        raise RuntimeError("live_requires_explicit_user_confirmation")
+    if target == "live":
+        # Hard release boundary: no confirmation flag or persisted state can
+        # authorize a real-money worker in this build.
+        raise RuntimeError("live_trading_hard_disabled_in_this_release")
 
     # Verify the selected account connection and balances before reporting
     # the worker as running to the API/UI.

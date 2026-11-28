@@ -1,6 +1,6 @@
-"""Environment-isolated Binance execution adapter for Spot and USD-M Futures.
-Live execution is fail-closed: server setting + explicit persisted user confirmation
-+ environment-specific credentials + read-only permission checks are required.
+"""Environment-isolated Binance adapter for Spot and USD-M Futures.
+Binance Live order execution is hard-disabled in this release; Live credentials
+may be used only for read-only monitoring. Testnet execution remains supervised.
 """
 from __future__ import annotations
 
@@ -44,6 +44,13 @@ _RATE_LIMIT_UNTIL = 0.0
 _TESTNET_TRADE_PERMISSION_LOCK = threading.Lock()
 _TESTNET_TRADE_PERMISSION_CACHE: dict[tuple[str, str, str], float] = {}
 _TESTNET_TRADE_PERMISSION_TTL_SECONDS = 300
+
+# USD-M Futures GET /fapi/v1/positionSide/dual has a high IP request weight.
+# Cache the read-only account mode briefly per API-key fingerprint and endpoint;
+# never cache missing credentials, malformed responses, or failed lookups.
+_FUTURES_POSITION_MODE_LOCK = threading.Lock()
+_FUTURES_POSITION_MODE_CACHE: dict[tuple[str, str], tuple[bool, float]] = {}
+_FUTURES_POSITION_MODE_TTL_SECONDS = 60
 
 
 def _rate_limit_remaining() -> float:
@@ -262,11 +269,8 @@ class BinanceTestnetAdapter:
             "execution_ready": False,
             "withdrawal_permissions": False if environment == "testnet" else None,
             "transfer_permissions": False if environment == "testnet" else None,
-            "live_blocked": environment == "live" and not (
-                settings.live_trading_enabled
-                and self.config.live_confirmed_by_user
-                and self.config.live_worker_ready
-            ),
+            "live_blocked": environment == "live",
+            "live_execution_hard_disabled": environment == "live",
         }
         if configured:
             try:
@@ -329,12 +333,10 @@ class BinanceTestnetAdapter:
                         )
                         result["permissions_verified"] = restriction_error is None
                         result["permission_check"] = restriction_error or "ok"
-                        result["execution_ready"] = bool(
-                            result["connected"] and result.get("trade_permission") is True
-                            and restriction_error is None
-                            and settings.live_trading_enabled
-                            and self.config.live_confirmed_by_user and self.config.live_worker_ready
-                        )
+                        # This release is read-only for Live regardless of account/API permissions.
+                        result["execution_ready"] = False
+                        result["live_blocked"] = True
+                        result["live_execution_hard_disabled"] = True
             except Exception as e:
                 result["connected"] = False
                 result["account_check"] = str(e)
@@ -492,22 +494,22 @@ class BinanceTestnetAdapter:
         return None
 
     def _execution_ready(self) -> dict[str, Any] | None:
-        if not self.config.enabled:
-            return {"ok": False, "sent_to_exchange": False, "error": "binance_execution_disabled"}
         if self.config.environment not in {"testnet", "live"}:
             return {"ok": False, "sent_to_exchange": False, "error": "unsupported_binance_environment"}
         if self.config.market not in {"spot", "futures"}:
             return {"ok": False, "sent_to_exchange": False, "error": "unsupported_market"}
-        if not self._api_key() or not self._api_secret():
-            return {"ok": False, "sent_to_exchange": False,
-                    "error": "live_credentials_missing" if self.config.environment == "live" else "testnet_credentials_missing"}
+        # Hard release boundary applies to every adapter instance, not only the
+        # Live subclass or the supervised worker. Live remains read-only.
         if self.config.environment == "live":
-            if not settings.live_trading_enabled:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_trading_disabled_by_server"}
-            if not self.config.live_confirmed_by_user:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_requires_explicit_user_confirmation"}
-            if not self.config.live_worker_ready:
-                return {"ok": False, "sent_to_exchange": False, "error": "live_supervised_worker_required"}
+            return {
+                "ok": False,
+                "sent_to_exchange": False,
+                "error": "live_trading_hard_disabled_in_this_release",
+            }
+        if not self.config.enabled:
+            return {"ok": False, "sent_to_exchange": False, "error": "binance_execution_disabled"}
+        if not self._api_key() or not self._api_secret():
+            return {"ok": False, "sent_to_exchange": False, "error": "testnet_credentials_missing"}
         return None
 
     def _symbol_filters(self, symbol: str) -> dict[str, float]:
@@ -667,9 +669,109 @@ class BinanceTestnetAdapter:
         return {"ok": False, "sent_to_exchange": False, "error": "isolated_margin_setup_failed",
                 "margin_type": "ISOLATED", "response": result}
 
+    def _get_futures_position_mode(self) -> dict[str, Any]:
+        """Read/cache the signed Futures position mode without burning weight 30 per order."""
+        try:
+            base = self._base_url()
+            api_key = self._api_key()
+        except Exception as exc:
+            return {"error": "futures_position_mode_credentials_unavailable",
+                    "detail": type(exc).__name__}
+
+        cache_key = None
+        if isinstance(api_key, str) and api_key.strip():
+            fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+            cache_key = (base, fingerprint)
+            now = time.monotonic()
+            with _FUTURES_POSITION_MODE_LOCK:
+                cached = _FUTURES_POSITION_MODE_CACHE.get(cache_key)
+                if cached is not None:
+                    dual_side, expires_at = cached
+                    if now < expires_at:
+                        return {"dualSidePosition": dual_side, "cached": True}
+                    _FUTURES_POSITION_MODE_CACHE.pop(cache_key, None)
+
+        response = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+        if (
+            not isinstance(response, dict)
+            or response.get("error")
+            or not isinstance(response.get("dualSidePosition"), bool)
+        ):
+            return response if isinstance(response, dict) else {
+                "error": "futures_position_mode_invalid_response",
+            }
+
+        dual_side = response["dualSidePosition"]
+        if cache_key is not None:
+            with _FUTURES_POSITION_MODE_LOCK:
+                _FUTURES_POSITION_MODE_CACHE[cache_key] = (
+                    dual_side, time.monotonic() + _FUTURES_POSITION_MODE_TTL_SECONDS,
+                )
+        return {"dualSidePosition": dual_side, "cached": False}
+
+    def _futures_position_order_params(
+        self, *, side: str, reduce_only: bool, position_side: str | None = None,
+    ) -> dict[str, Any]:
+        """Build Futures parameters for the account's verified One-way/Hedge mode.
+
+        Binance Hedge Mode requires positionSide=LONG/SHORT and rejects
+        reduceOnly. One-way Mode uses reduceOnly for position-reducing orders.
+        Mode lookup failure is fail-closed before any order submission.
+        """
+        if self.config.market != "futures":
+            return {}
+
+        mode = self._get_futures_position_mode()
+        if (
+            not isinstance(mode, dict)
+            or mode.get("error")
+            or not isinstance(mode.get("dualSidePosition"), bool)
+        ):
+            return {
+                "error": "futures_position_mode_unavailable",
+                "details": mode,
+            }
+
+        normalized_side = str(side or "").strip().upper()
+        if normalized_side not in {"BUY", "SELL"}:
+            return {"error": "invalid_futures_order_side"}
+
+        supplied_position_side = (
+            str(position_side).strip().upper() if position_side is not None else None
+        )
+        if supplied_position_side not in {None, "LONG", "SHORT"}:
+            return {"error": "invalid_futures_position_side"}
+
+        if reduce_only:
+            inferred_position_side = "LONG" if normalized_side == "SELL" else "SHORT"
+        else:
+            inferred_position_side = "LONG" if normalized_side == "BUY" else "SHORT"
+
+        selected_position_side = supplied_position_side or inferred_position_side
+        expected_order_side = (
+            ("SELL" if selected_position_side == "LONG" else "BUY")
+            if reduce_only else
+            ("BUY" if selected_position_side == "LONG" else "SELL")
+        )
+        if normalized_side != expected_order_side:
+            return {
+                "error": "futures_order_side_position_side_mismatch",
+                "side": normalized_side,
+                "position_side": selected_position_side,
+                "expected_order_side": expected_order_side,
+                "reduce_only": bool(reduce_only),
+            }
+
+        if mode["dualSidePosition"] is True:
+            # Binance does not permit reduceOnly in Hedge Mode.
+            return {"positionSide": selected_position_side}
+        # In One-way Mode Binance manages the net position; positionSide is omitted.
+        return {"reduceOnly": "true"} if reduce_only else {}
+
     def place_order(self, symbol: str, side: str, order_type: str, quantity: float,
                     price: float | None = None, *, leverage: float = 1.0,
                     reduce_only: bool = False, idempotency_key: str | None = None,
+                    position_side: str | None = None,
                     market_conduct_flags: dict[str, Any] | None = None) -> dict[str, Any]:
         blocked = self._execution_ready()
         if blocked:
@@ -688,6 +790,20 @@ class BinanceTestnetAdapter:
         account = self.get_account()
         if not isinstance(account, dict) or account.get("error") or account.get("canTrade") is not True:
             return {"ok": False, "sent_to_exchange": False, "error": "testnet_account_not_tradeable", "details": account}
+
+        futures_position_params: dict[str, Any] = {}
+        if market == MarketType.FUTURES:
+            futures_position_params = self._futures_position_order_params(
+                side=side,
+                reduce_only=bool(reduce_only),
+                position_side=position_side,
+            )
+            if futures_position_params.get("error"):
+                return {
+                    "ok": False,
+                    "sent_to_exchange": False,
+                    **futures_position_params,
+                }
         try:
             filters = self._symbol_filters(symbol)
             # The limit price is never a valid substitute for the market reference
@@ -808,8 +924,8 @@ class BinanceTestnetAdapter:
                 return {"ok": False, "sent_to_exchange": False, "error": "limit_price_required"}
             params["price"] = format(float(price), ".12f").rstrip("0").rstrip(".")
             params["timeInForce"] = "GTC"
-        if market == MarketType.FUTURES and reduce_only:
-            params["reduceOnly"] = "true"
+        if market == MarketType.FUTURES:
+            params.update(futures_position_params)
         endpoint = "/fapi/v1/order" if market == MarketType.FUTURES else "/api/v3/order"
         res = self._request("POST", endpoint, signed=True, params=params)
         ok = isinstance(res, dict) and "error" not in res
@@ -828,17 +944,25 @@ class BinanceTestnetAdapter:
                 "precheck": pre.to_dict(), "leverage": int(lev) if market == MarketType.FUTURES else 1}
 
     def close_position(self, symbol: str, side: str, quantity: float, *, leverage: float = 1.0,
-                       idempotency_key: str | None = None) -> dict[str, Any]:
-        position_side = str(side or "").strip().upper()
-        if position_side in {"BUY", "LONG", "LONG_SPOT"}:
+                       idempotency_key: str | None = None,
+                       position_side: str | None = None) -> dict[str, Any]:
+        raw_position_side = str(side or "").strip().upper()
+        if raw_position_side in {"BUY", "LONG", "LONG_SPOT"}:
             close_side = "SELL"
-        elif position_side in {"SELL", "SHORT"}:
+            inferred_position_side = "LONG"
+        elif raw_position_side in {"SELL", "SHORT"}:
             close_side = "BUY"
+            inferred_position_side = "SHORT"
         else:
             return {"ok": False, "sent_to_exchange": False, "error": "invalid_position_side_for_close"}
+        selected_position_side = (
+            str(position_side).strip().upper() if position_side is not None
+            else inferred_position_side
+        )
         return self.place_order(symbol, close_side, "MARKET", quantity, leverage=leverage,
                                 reduce_only=self.config.market == "futures",
-                                idempotency_key=idempotency_key)
+                                idempotency_key=idempotency_key,
+                                position_side=selected_position_side)
 
     def get_account(self) -> dict[str, Any]:
         if self.config.market == "futures":
@@ -997,14 +1121,22 @@ class BinanceTestnetAdapter:
         return {"mode": "shadow", "sent_to_exchange": False, "precheck": pre}
 
     def place_order_live(self, **kwargs) -> dict[str, Any]:
-        """Explicit Live execution entrypoint; still guarded by config and user confirmation."""
+        """Legacy Live entrypoint retained only as a fail-closed compatibility guard."""
         if self.config.environment != "live":
             return {"ok": False, "sent_to_exchange": False, "error": "live_adapter_environment_required"}
         return self.place_order(**kwargs)
 
 
 class BinanceLiveAdapter(BinanceTestnetAdapter):
-    """Explicit Live adapter type; cannot be instantiated with Testnet settings."""
+    """Legacy Live adapter type; read-only monitoring only in this release."""
+
+    def _execution_ready(self) -> dict[str, Any]:
+        """Hard release boundary: Live is read-only; block every exchange-side write."""
+        return {
+            "ok": False,
+            "sent_to_exchange": False,
+            "error": "live_trading_hard_disabled_in_this_release",
+        }
     name = "binance_live"
 
     def __init__(self, config: BinanceConfig | None = None):
