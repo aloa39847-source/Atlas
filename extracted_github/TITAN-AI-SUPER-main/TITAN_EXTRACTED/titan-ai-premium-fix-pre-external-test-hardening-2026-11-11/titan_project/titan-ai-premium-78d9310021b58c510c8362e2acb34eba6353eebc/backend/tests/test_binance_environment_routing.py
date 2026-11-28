@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.core.config import settings
 from app.services import binance_execution as execution_module
 from app.services.binance_execution import binance_execution_service
@@ -492,3 +494,247 @@ def test_live_adapter_does_not_require_extra_server_or_geo_kyc_environment_flags
     monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
     monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
     assert adapter._execution_ready() is None
+
+
+def test_futures_hedge_mode_routes_open_and_close_orders_to_correct_position_leg(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda method, path, signed=False, params=None: {
+        "dualSidePosition": True,
+    })
+    cases = [
+        ("BUY", False, "LONG", {"positionSide": "LONG"}),
+        ("SELL", False, "SHORT", {"positionSide": "SHORT"}),
+        ("SELL", True, "LONG", {"positionSide": "LONG"}),
+        ("BUY", True, "SHORT", {"positionSide": "SHORT"}),
+    ]
+    for side, reduce_only, position_side, expected in cases:
+        result = adapter._futures_position_order_params(
+            side=side, reduce_only=reduce_only, position_side=position_side,
+        )
+        assert result == expected
+        assert "reduceOnly" not in result
+
+
+def test_futures_one_way_close_uses_reduce_only_without_position_side(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda method, path, signed=False, params=None: {
+        "dualSidePosition": False,
+    })
+    close_long = adapter._futures_position_order_params(
+        side="SELL", reduce_only=True, position_side="LONG",
+    )
+    close_short = adapter._futures_position_order_params(
+        side="BUY", reduce_only=True, position_side="SHORT",
+    )
+    open_long = adapter._futures_position_order_params(
+        side="BUY", reduce_only=False, position_side="LONG",
+    )
+    assert close_long == {"reduceOnly": "true"}
+    assert close_short == {"reduceOnly": "true"}
+    assert open_long == {}
+    assert "positionSide" not in close_long
+
+
+def test_futures_position_mode_lookup_failure_blocks_order_parameter_generation(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: {
+        "error": "signed_request_failed", "status": 401,
+    })
+    result = adapter._futures_position_order_params(
+        side="SELL", reduce_only=True, position_side="LONG",
+    )
+    assert result["error"] == "futures_position_mode_unavailable"
+
+
+def test_futures_position_side_and_order_direction_must_match(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: {
+        "dualSidePosition": True,
+    })
+    result = adapter._futures_position_order_params(
+        side="BUY", reduce_only=True, position_side="LONG",
+    )
+    assert result["error"] == "futures_order_side_position_side_mismatch"
+    assert result["position_side"] == "LONG"
+    assert result["expected_order_side"] == "SELL"
+
+
+@pytest.mark.parametrize(
+    ("hedge_mode", "expected_position_params"),
+    [
+        (True, {"positionSide": "LONG"}),
+        (False, {"reduceOnly": "true"}),
+    ],
+)
+def test_futures_reduce_only_submission_uses_exchange_position_mode_parameters(
+    monkeypatch, hedge_mode, expected_position_params,
+):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_execution_ready", lambda: None)
+    monkeypatch.setattr(adapter, "get_account", lambda: {
+        "canTrade": True, "availableBalance": "1000",
+    })
+    monkeypatch.setattr(adapter, "_symbol_filters", lambda symbol: {
+        "avgPriceMins": 0, "stepSize": "0.001", "minQty": "0.001",
+        "maxQty": "100", "minNotional": "5",
+    })
+    monkeypatch.setattr(adapter, "_market_price", lambda symbol: 100.0)
+    monkeypatch.setattr(adapter, "get_open_orders", lambda symbol=None: [])
+    monkeypatch.setattr(adapter, "_open_order_conduct_veto", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adapter.gateway, "validate", lambda **kwargs: SimpleNamespace(
+        ok=True, normalized={}, to_dict=lambda: {},
+    ))
+
+    calls = []
+    def fake_request(method, path, signed=False, params=None):
+        calls.append((method, path, signed, dict(params or {})))
+        if method == "GET" and path == "/fapi/v1/positionSide/dual":
+            return {"dualSidePosition": hedge_mode}
+        if method == "POST" and path == "/fapi/v1/order":
+            return {
+                "symbol": "BTCUSDT", "orderId": 987, "status": "NEW",
+                "executedQty": "0", "avgPrice": "0",
+                "clientOrderId": (params or {}).get("newClientOrderId"),
+            }
+        raise AssertionError(f"Unexpected Binance request: {method} {path}")
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.place_order(
+        "BTCUSDT", "SELL", "MARKET", 0.02,
+        leverage=2.0, reduce_only=True,
+        idempotency_key="futures-hedge-close-0001",
+        position_side="LONG",
+    )
+
+    assert result["ok"] is True
+    assert result["sent_to_exchange"] is True
+    request = next(call for call in calls if call[0] == "POST")
+    params = request[3]
+    assert params["side"] == "SELL"
+    assert params["quantity"] == "0.02"
+    for key, value in expected_position_params.items():
+        assert params[key] == value
+    if hedge_mode:
+        assert "reduceOnly" not in params
+    else:
+        assert "positionSide" not in params
+
+
+def test_futures_order_submission_stops_when_position_mode_cannot_be_verified(monkeypatch):
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_execution_ready", lambda: None)
+    monkeypatch.setattr(adapter, "get_account", lambda: {
+        "canTrade": True, "availableBalance": "1000",
+    })
+    calls = []
+
+    def fake_request(method, path, signed=False, params=None):
+        calls.append((method, path))
+        return {"error": "position_mode_unavailable"}
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.place_order(
+        "BTCUSDT", "SELL", "MARKET", 0.02,
+        leverage=2.0, reduce_only=True, position_side="LONG",
+        idempotency_key="futures-mode-unavailable-0001",
+    )
+    assert result["ok"] is False
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "futures_position_mode_unavailable"
+    assert calls == [("GET", "/fapi/v1/positionSide/dual")]
+
+
+def test_futures_position_mode_cache_is_scoped_by_key_and_expires(monkeypatch):
+    from app.integrations import binance_adapter as module
+
+    monkeypatch.setattr(module, "_FUTURES_POSITION_MODE_CACHE", {})
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    first = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    first_key = ["futures-key-a"]
+    monkeypatch.setattr(first, "_api_key", lambda: first_key[0])
+    monkeypatch.setattr(first, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"dualSidePosition": True}
+    ))
+
+    assert first._get_futures_position_mode() == {
+        "dualSidePosition": True, "cached": False,
+    }
+    assert first._get_futures_position_mode() == {
+        "dualSidePosition": True, "cached": True,
+    }
+    assert len(calls) == 1
+
+    same_key_adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(same_key_adapter, "_api_key", lambda: "futures-key-a")
+    monkeypatch.setattr(same_key_adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"dualSidePosition": False}
+    ))
+    assert same_key_adapter._get_futures_position_mode()["dualSidePosition"] is True
+    assert len(calls) == 1
+
+    other_key_adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(other_key_adapter, "_api_key", lambda: "futures-key-b")
+    monkeypatch.setattr(other_key_adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"dualSidePosition": False}
+    ))
+    assert other_key_adapter._get_futures_position_mode() == {
+        "dualSidePosition": False, "cached": False,
+    }
+    assert len(calls) == 2
+
+    clock[0] += module._FUTURES_POSITION_MODE_TTL_SECONDS + 1
+    assert first._get_futures_position_mode() == {
+        "dualSidePosition": True, "cached": False,
+    }
+    assert len(calls) == 3
+
+
+def test_futures_position_mode_cache_never_caches_missing_key_or_failed_read(monkeypatch):
+    from app.integrations import binance_adapter as module
+
+    monkeypatch.setattr(module, "_FUTURES_POSITION_MODE_CACHE", {})
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="testnet", market="futures",
+    ))
+    monkeypatch.setattr(adapter, "_api_key", lambda: None)
+    calls = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        calls.append(1) or {"dualSidePosition": False}
+    ))
+    adapter._get_futures_position_mode()
+    adapter._get_futures_position_mode()
+    assert len(calls) == 2
+    assert module._FUTURES_POSITION_MODE_CACHE == {}
+
+    monkeypatch.setattr(adapter, "_api_key", lambda: "futures-key")
+    failures = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        failures.append(1) or {"error": "signed_read_failed", "status": 401}
+    ))
+    first = adapter._get_futures_position_mode()
+    second = adapter._get_futures_position_mode()
+    assert first["error"] == "signed_read_failed"
+    assert second["error"] == "signed_read_failed"
+    assert len(failures) == 2
+    assert module._FUTURES_POSITION_MODE_CACHE == {}
