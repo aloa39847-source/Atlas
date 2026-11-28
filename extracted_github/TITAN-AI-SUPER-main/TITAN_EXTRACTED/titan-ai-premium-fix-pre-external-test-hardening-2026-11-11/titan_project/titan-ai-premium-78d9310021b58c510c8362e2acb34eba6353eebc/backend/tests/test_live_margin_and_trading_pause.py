@@ -92,7 +92,7 @@ def test_execution_boundary_requires_explicit_live_confirmation_before_sizing(tm
             idempotency_key="live-margin-cap-test-001", live_worker_ready=True,
             order_metadata={"intent": "open", "reference_price": 100.0},
         )
-        assert result["error"] == "live_requires_explicit_user_confirmation"
+        assert result["error"] == "live_trading_hard_disabled_in_this_release"
         assert result["sent_to_exchange"] is False
     finally:
         db.close()
@@ -553,7 +553,7 @@ def test_core_live_start_requires_explicit_confirmation_even_when_server_enabled
             live_confirmed_by_user=False, risk_limits={},
         ))
         db.commit()
-        with pytest.raises(ValueError, match="live_requires_explicit_user_confirmation"):
+        with pytest.raises(ValueError, match="live_trading_hard_disabled_in_this_release"):
             core_service.start_bot(db, account_target="live", live_confirm=False)
         state = db.get(SystemState, 1)
         assert state.account_target == "live"
@@ -564,12 +564,10 @@ def test_core_live_start_requires_explicit_confirmation_even_when_server_enabled
         engine.dispose()
 
 
-def test_core_live_start_accepts_only_explicit_confirmation_and_stays_supervised(tmp_path, monkeypatch):
+def test_core_live_start_remains_hard_disabled_even_with_explicit_confirmation(tmp_path, monkeypatch):
+    import pytest
+
     monkeypatch.setattr(settings, "live_trading_enabled", True)
-    monkeypatch.setattr(
-        binance_execution_service, "preflight",
-        lambda db, live_worker_ready=False: {"ready": True, "connected": True},
-    )
     engine, db = _execution_test_db(tmp_path)
     try:
         db.add(SystemState(
@@ -578,14 +576,14 @@ def test_core_live_start_accepts_only_explicit_confirmation_and_stays_supervised
             live_confirmed_by_user=False, risk_limits={"max_daily_loss_cap": 0.07},
         ))
         db.commit()
-        result = core_service.start_bot(db, account_target="live", live_confirm=True)
+        with pytest.raises(ValueError, match="live_trading_hard_disabled_in_this_release"):
+            core_service.start_bot(db, account_target="live", live_confirm=True)
         state = db.get(SystemState, 1)
-        assert result["ok"] is True
-        assert state.account_target == "live"
-        assert state.environment_mode == "live"
-        assert state.live_confirmed_by_user is True
-        assert state.bot_run_state == "starting"
-        assert state.autonomous_enabled is True
+        assert state.account_target == "demo"
+        assert state.environment_mode == "demo"
+        assert state.live_confirmed_by_user is False
+        assert state.bot_run_state == "stopped"
+        assert state.autonomous_enabled is False
     finally:
         db.close()
         engine.dispose()
@@ -614,9 +612,9 @@ def test_live_execution_is_blocked_when_server_live_switch_is_disabled(tmp_path,
             idempotency_key="server-live-disabled-01", live_worker_ready=True,
             order_metadata={"intent": "open", "reference_price": 100.0},
         )
-        assert preflight["error"] == "live_trading_disabled_by_server"
+        assert preflight["error"] == "live_trading_hard_disabled_in_this_release"
         assert preflight["ready"] is False
-        assert result["error"] == "live_trading_disabled_by_server"
+        assert result["error"] == "live_trading_hard_disabled_in_this_release"
         assert result["sent_to_exchange"] is False
         assert adapter_calls == []
     finally:
