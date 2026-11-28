@@ -51,7 +51,7 @@ def test_retired_testnet_patch_helpers_cannot_reenable_direct_order_or_close_rou
         "apply_testnet_idempotency.py",
         "apply_safe_testnet_close.py",
     )
-    script_dir = Path(__file__).resolve().parents[2] / ".github" / "scripts"
+    script_dir = Path(__file__).resolve().parents[4] / ".github" / "scripts"
     for name in scripts:
         source = (script_dir / name).read_text(encoding="utf-8")
         tree = ast.parse(source)
