@@ -57,6 +57,13 @@ def _evaluate_decision_advisory_safely(db: Session, context: dict[str, Any]) -> 
             safe_report["risk_veto_owner"] = "independent_risk_manager"
         return safe_report
     except Exception as exc:
+        # Provider usage/audit writes share this SQLAlchemy session. If one of
+        # those writes failed, release the failed transaction before the
+        # quantitative decision is persisted later in this method.
+        try:
+            db.rollback()
+        except Exception:
+            pass
         unavailable["error_type"] = type(exc).__name__
         return unavailable
 
