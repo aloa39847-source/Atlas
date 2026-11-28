@@ -338,3 +338,25 @@ def test_live_adapter_hard_blocks_all_exchange_writes_in_this_release(monkeypatc
     assert cancel["sent_to_exchange"] is False
     assert cancel["error"] == "live_trading_hard_disabled_in_this_release"
     assert calls == []
+
+
+def test_base_binance_adapter_cannot_bypass_live_release_lock(monkeypatch):
+    from app.integrations.binance_adapter import BinanceConfig, BinanceTestnetAdapter
+
+    adapter = BinanceTestnetAdapter(BinanceConfig(
+        enabled=True, environment="live", market="futures",
+    ))
+    calls = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"ok": True}
+    ))
+
+    result = adapter.place_order(
+        "BTCUSDT", "BUY", "MARKET", 0.001,
+        idempotency_key="base-adapter-live-hard-lock-0001",
+    )
+
+    assert result["ok"] is False
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "live_trading_hard_disabled_in_this_release"
+    assert calls == []
