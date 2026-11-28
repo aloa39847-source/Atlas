@@ -46,7 +46,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db), authorizat
 
 
 class StateUpdate(BaseModel):
-    environment_mode: str | None = Field(None, description="demo|live; Live account monitoring is read-only until explicit Live Start confirmation. Binance Testnet is selected separately via account_target.")
+    environment_mode: str | None = Field(None, description="demo|live; Live account monitoring is read-only and Live order execution is hard-disabled in this release. Binance Testnet is selected separately via account_target.")
     market_type: str | None = Field(None, description="spot|futures|earn")
     autonomous_enabled: bool | None = None
     emergency_stop: bool | None = None
@@ -141,7 +141,7 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             configured = bool(credentials.get("configured"))
         except Exception:
             configured = False
-        live_server_enabled = bool(settings.live_trading_enabled) if target == "live" else False
+        live_server_enabled = False
         live_user_confirmed = bool(state.get("live_confirmed_by_user")) if target == "live" else False
         binance = {
             "status": "credentials_configured_not_connected" if configured else "needs_credentials",
@@ -152,11 +152,11 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             "orders_submitted": False,
             "server_live_enabled": live_server_enabled,
             "user_live_confirmed": live_user_confirmed,
-            "live_start_required": target == "live" and not live_user_confirmed,
+            "live_start_required": False,
+            "live_execution_hard_disabled": True,
             "execution_ready": False,
             "note": (
-                "Live credentials are for read-only monitoring until Live Start is explicitly confirmed for this run; "
-                "server enablement and all execution/risk checks are also required."
+                "Live credentials are for read-only monitoring only; Live order execution is hard-disabled in this release."
                 if target == "live" else
                 "Testnet credentials are stored separately; this status request does not submit orders."
             ),

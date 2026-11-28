@@ -600,3 +600,46 @@ def test_futures_entry_persists_and_passes_expected_position_leg(
     finally:
         db.close()
         engine.dispose()
+
+
+def test_live_execution_is_hard_disabled_even_when_server_and_user_flags_are_true(tmp_path, monkeypatch):
+    engine, db = _session(tmp_path)
+    state = db.get(SystemState, 1)
+    state.account_target = "live"
+    state.environment_mode = "live"
+    state.live_trading_enabled = True
+    state.live_confirmed_by_user = True
+    state.bot_run_state = "running"
+    db.add(state)
+    db.commit()
+
+    adapter_calls = []
+    monkeypatch.setattr(execution_module.settings, "live_trading_enabled", True)
+    monkeypatch.setattr(
+        binance_execution_service, "adapter_for",
+        lambda *args, **kwargs: adapter_calls.append((args, kwargs)),
+    )
+    try:
+        result = binance_execution_service.execute_order(
+            db,
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="market",
+            quantity=0.001,
+            price=50000.0,
+            leverage=1.0,
+            reduce_only=False,
+            idempotency_key="live-hard-lock-service-0001",
+            live_worker_ready=True,
+        )
+        preflight = binance_execution_service.preflight(db, live_worker_ready=True)
+        assert result["ok"] is False
+        assert result["sent_to_exchange"] is False
+        assert result["error"] == "live_trading_hard_disabled_in_this_release"
+        assert preflight["ready"] is False
+        assert preflight["error"] == "live_trading_hard_disabled_in_this_release"
+        assert adapter_calls == []
+        assert db.execute(select(OrderRecord)).scalars().all() == []
+    finally:
+        db.close()
+        engine.dispose()

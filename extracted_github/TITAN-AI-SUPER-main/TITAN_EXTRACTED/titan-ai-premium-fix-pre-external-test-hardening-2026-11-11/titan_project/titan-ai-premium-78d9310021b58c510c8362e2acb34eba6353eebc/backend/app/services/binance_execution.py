@@ -84,11 +84,9 @@ class BinanceExecutionService:
         if bool(state.emergency_stop) and not allow_emergency_exit:
             return {"ok": False, "ready": False, "error": "emergency_stop_active"}
         target = str(getattr(state, "account_target", "demo") or "demo").lower()
-        if target == "live" and (
-            not bool(settings.live_trading_enabled)
-            or not bool(getattr(state, "live_trading_enabled", False))
-        ):
-            return {"ok": False, "ready": False, "error": "live_trading_disabled_by_server",
+        if target == "live":
+            return {"ok": False, "ready": False,
+                    "error": "live_trading_hard_disabled_in_this_release",
                     "orders_submitted": False}
         record = None
         try:
@@ -205,15 +203,9 @@ class BinanceExecutionService:
         environment = target
         if target not in {"testnet", "live"}:
             return {"ok": False, "sent_to_exchange": False, "error": "external_execution_requires_binance_account"}
-        if target == "live" and (
-            not bool(settings.live_trading_enabled)
-            or not bool(getattr(state, "live_trading_enabled", False))
-        ):
+        if target == "live":
             return {"ok": False, "sent_to_exchange": False,
-                    "error": "live_trading_disabled_by_server"}
-        if target == "live" and not bool(getattr(state, "live_confirmed_by_user", False)):
-            return {"ok": False, "sent_to_exchange": False,
-                    "error": "live_requires_explicit_user_confirmation"}
+                    "error": "live_trading_hard_disabled_in_this_release"}
         if not isinstance(idempotency_key, str) or len(idempotency_key.strip()) < 8:
             return {"ok": False, "sent_to_exchange": False, "error": "valid_idempotency_key_required"}
         # Idempotency lookup must precede worker/emergency-stop gates: a replay

@@ -108,7 +108,7 @@ class TitanCompliancePolicyEngine:
             return conduct
         if environment_mode == "live" and not live_enabled:
             return ComplianceFinding(False, "block", "live_not_explicitly_enabled", "execution_control", self._sources(),
-                                     "Use Demo/Testnet or enable Live explicitly after review and approval.")
+                                     "Use Demo or Binance Testnet. Live execution is hard-disabled in this release.")
         if quantity <= 0 or (price is not None and price <= 0):
             return ComplianceFinding(False, "block", "invalid_order_parameters", "order_integrity", self._sources(),
                                      "Correct order quantity/price and recheck symbol filters.")

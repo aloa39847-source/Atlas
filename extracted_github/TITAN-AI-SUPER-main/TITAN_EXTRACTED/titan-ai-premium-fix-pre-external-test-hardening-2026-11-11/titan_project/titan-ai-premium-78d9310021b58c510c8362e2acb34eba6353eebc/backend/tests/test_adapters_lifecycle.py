@@ -313,3 +313,28 @@ def test_futures_open_order_is_blocked_if_exchange_refuses_isolated_margin(monke
     assert "/fapi/v1/marginType" in calls
     assert "/fapi/v1/leverage" not in calls
     assert "/fapi/v1/order" not in calls
+
+
+def test_live_adapter_hard_blocks_all_exchange_writes_in_this_release(monkeypatch):
+    from app.integrations.binance_adapter import BinanceConfig, BinanceLiveAdapter
+
+    adapter = BinanceLiveAdapter(BinanceConfig(
+        enabled=True, environment="live", market="spot",
+    ))
+    calls = []
+    monkeypatch.setattr(adapter, "_request", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"ok": True}
+    ))
+
+    result = adapter.place_order(
+        "BTCUSDT", "BUY", "MARKET", 0.001,
+        idempotency_key="live-hard-lock-order-0001",
+    )
+    cancel = adapter.cancel_order("BTCUSDT", order_id=123)
+
+    assert result["ok"] is False
+    assert result["sent_to_exchange"] is False
+    assert result["error"] == "live_trading_hard_disabled_in_this_release"
+    assert cancel["sent_to_exchange"] is False
+    assert cancel["error"] == "live_trading_hard_disabled_in_this_release"
+    assert calls == []

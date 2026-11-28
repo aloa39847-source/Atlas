@@ -132,7 +132,7 @@ def test_live_credentials_reject_unsupported_market_before_storage(monkeypatch):
     assert called == []
 
 
-def test_live_status_reports_read_only_until_explicit_start(monkeypatch):
+def test_live_status_reports_read_only_and_hard_disabled_in_this_release(monkeypatch):
     db = FakeDB()
     class FakeAdapter:
         def status(self):
@@ -140,7 +140,7 @@ def test_live_status_reports_read_only_until_explicit_start(monkeypatch):
     monkeypatch.setattr(star_app, "db_sess", lambda: db)
     monkeypatch.setattr(star_app, "require_user", lambda request, session: (SimpleNamespace(email="user"), None))
     monkeypatch.setattr(star_app, "_get_binance_live_adapter", lambda market, session: FakeAdapter())
-    monkeypatch.setattr(star_app, "settings", SimpleNamespace(live_trading_enabled=True))
+    monkeypatch.setattr(star_app, "settings", SimpleNamespace(live_trading_enabled=False))
     monkeypatch.setattr(star_app.core_service, "get_state", lambda session: {
         "account_target": "live", "live_confirmed_by_user": False,
     })
@@ -148,10 +148,13 @@ def test_live_status_reports_read_only_until_explicit_start(monkeypatch):
     payload = json.loads(response.body)
     assert response.status_code == 200
     assert payload["live_blocked"] is True
-    assert payload["server_live_enabled"] is True
+    assert payload["server_live_enabled"] is False
+    assert payload["live_start_required"] is False
+    assert payload["live_execution_hard_disabled"] is True
     assert payload["user_live_confirmed"] is False
     assert payload["orders_submitted"] is False
-    assert "read-only monitoring" in payload["note"]
+    assert "read-only monitoring only" in payload["note"]
+    assert "hard-disabled" in payload["note"]
     assert db.closed is True
 
 
