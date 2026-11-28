@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = "https://testnet.binancefuture.com"
+BASE = "https://demo-fapi.binance.com"
 
 
 class PreflightError(RuntimeError):
