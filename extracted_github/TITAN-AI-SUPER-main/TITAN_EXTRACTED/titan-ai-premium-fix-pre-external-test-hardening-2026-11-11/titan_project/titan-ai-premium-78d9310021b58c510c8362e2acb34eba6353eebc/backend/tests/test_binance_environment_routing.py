@@ -33,7 +33,7 @@ def test_live_trading_is_hard_disabled_even_with_server_override(monkeypatch):
     assert Settings().live_trading_enabled is False
 
 
-def test_live_execution_requires_server_enablement_user_confirmation_and_worker(monkeypatch):
+def test_live_execution_is_hard_disabled_even_with_all_flags_enabled(monkeypatch):
     monkeypatch.setattr(settings, "live_trading_enabled", True)
     adapter = BinanceTestnetAdapter(BinanceConfig(
         enabled=True, environment="live", market="spot",
@@ -43,15 +43,10 @@ def test_live_execution_requires_server_enablement_user_confirmation_and_worker(
     ))
     monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
     monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
-    assert adapter._execution_ready() is None
-
-    unconfirmed = BinanceTestnetAdapter(BinanceConfig(
-        enabled=True, environment="live", market="spot",
-        live_confirmed_by_user=False, live_worker_ready=True,
-    ))
-    monkeypatch.setattr(unconfirmed, "_api_key", lambda: "masked-key")
-    monkeypatch.setattr(unconfirmed, "_api_secret", lambda: "masked-secret")
-    assert unconfirmed._execution_ready()["error"] == "live_requires_explicit_user_confirmation"
+    blocked = adapter._execution_ready()
+    assert blocked is not None
+    assert blocked["sent_to_exchange"] is False
+    assert blocked["error"] == "live_trading_hard_disabled_in_this_release"
 
 
 def test_live_adapter_direct_execution_honors_server_global_disable(monkeypatch):
@@ -65,7 +60,7 @@ def test_live_adapter_direct_execution_honors_server_global_disable(monkeypatch)
     blocked = adapter._execution_ready()
     assert blocked is not None
     assert blocked["sent_to_exchange"] is False
-    assert blocked["error"] == "live_trading_disabled_by_server"
+    assert blocked["error"] == "live_trading_hard_disabled_in_this_release"
 
 
 def test_live_status_performs_read_only_account_and_permission_checks(monkeypatch):
@@ -485,7 +480,7 @@ def test_live_status_respects_server_global_kill_switch(monkeypatch):
                      ("GET", "/sapi/v1/account/apiRestrictions", True)]
 
 
-def test_live_adapter_does_not_require_extra_server_or_geo_kyc_environment_flags(monkeypatch):
+def test_live_adapter_stays_hard_disabled_without_extra_server_or_geo_kyc_flags(monkeypatch):
     monkeypatch.setattr(settings, "live_trading_enabled", True)
     adapter = BinanceTestnetAdapter(BinanceConfig(
         enabled=True, environment="live", market="spot",
@@ -493,7 +488,10 @@ def test_live_adapter_does_not_require_extra_server_or_geo_kyc_environment_flags
     ))
     monkeypatch.setattr(adapter, "_api_key", lambda: "masked-key")
     monkeypatch.setattr(adapter, "_api_secret", lambda: "masked-secret")
-    assert adapter._execution_ready() is None
+    blocked = adapter._execution_ready()
+    assert blocked is not None
+    assert blocked["sent_to_exchange"] is False
+    assert blocked["error"] == "live_trading_hard_disabled_in_this_release"
 
 
 def test_futures_hedge_mode_routes_open_and_close_orders_to_correct_position_leg(monkeypatch):
