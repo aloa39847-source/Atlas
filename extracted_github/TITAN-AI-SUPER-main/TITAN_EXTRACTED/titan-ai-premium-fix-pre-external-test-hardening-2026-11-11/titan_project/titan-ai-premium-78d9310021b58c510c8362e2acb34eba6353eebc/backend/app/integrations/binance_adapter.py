@@ -269,11 +269,8 @@ class BinanceTestnetAdapter:
             "execution_ready": False,
             "withdrawal_permissions": False if environment == "testnet" else None,
             "transfer_permissions": False if environment == "testnet" else None,
-            "live_blocked": environment == "live" and not (
-                settings.live_trading_enabled
-                and self.config.live_confirmed_by_user
-                and self.config.live_worker_ready
-            ),
+            "live_blocked": environment == "live",
+            "live_execution_hard_disabled": environment == "live",
         }
         if configured:
             try:
@@ -336,12 +333,10 @@ class BinanceTestnetAdapter:
                         )
                         result["permissions_verified"] = restriction_error is None
                         result["permission_check"] = restriction_error or "ok"
-                        result["execution_ready"] = bool(
-                            result["connected"] and result.get("trade_permission") is True
-                            and restriction_error is None
-                            and settings.live_trading_enabled
-                            and self.config.live_confirmed_by_user and self.config.live_worker_ready
-                        )
+                        # This release is read-only for Live regardless of account/API permissions.
+                        result["execution_ready"] = False
+                        result["live_blocked"] = True
+                        result["live_execution_hard_disabled"] = True
             except Exception as e:
                 result["connected"] = False
                 result["account_check"] = str(e)
