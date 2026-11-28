@@ -59,8 +59,8 @@ SEED_CONCEPTS: list[KnowledgeConcept] = [
         ["Trend following performs differently than mean reversion/range strategies.", "Test strategies across regimes and out-of-sample periods.", "Disable or review strategies that degrade."],
         ["strategy", "regime", "trend", "range"], "Historical performance is not proof of future performance."),
     KnowledgeConcept("demo_live_safety", "operations", "Demo/Live Separation and Safety Controls",
-        "Demo and Live environments must remain strictly separated with explicit user control.",
-        ["Never auto-switch from Demo to Live.", "Require explicit approval and enabled config for Live.", "No withdrawal/transfer permissions for API keys.", "Emergency stop should prevent new risk-taking actions."],
+        "Demo and Live environments must remain strictly separated. Live order execution is hard-disabled in this release.",
+        ["Never auto-switch from Demo to Live.", "Live credentials may be used for read-only monitoring only; no approval or dashboard control can enable Live orders in this release.", "Any future Live re-enablement requires a separate release, explicit user decision, and independent safety review.", "No withdrawal/transfer permissions for API keys.", "Emergency stop should prevent new risk-taking actions."],
         ["demo", "live", "safety", "permissions"], "Operational safety overrides automation convenience."),
 ]
 

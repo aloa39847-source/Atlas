@@ -29,23 +29,14 @@ def test_testnet_worker_passes_policy_gate_and_reaches_preflight(monkeypatch):
         binance_trading_worker.run(interval_seconds=60)
 
 
-def test_live_worker_requires_explicit_user_confirmation_before_any_exchange_access(monkeypatch):
-    monkeypatch.setattr(binance_trading_worker, "_read_control", lambda: _control("live", False))
-    monkeypatch.setattr(
-        binance_trading_worker.dbmod,
-        "SessionLocal",
-        lambda: (_ for _ in ()).throw(AssertionError("No database/exchange access before explicit approval")),
-    )
-    with pytest.raises(RuntimeError, match="live_requires_explicit_user_confirmation"):
-        binance_trading_worker.run(interval_seconds=60)
+def test_live_worker_is_hard_disabled_before_any_database_or_exchange_access(monkeypatch):
+    for confirmed in (False, True):
+        monkeypatch.setattr(binance_trading_worker, "_read_control", lambda confirmed=confirmed: _control("live", confirmed))
+        monkeypatch.setattr(
+            binance_trading_worker.dbmod,
+            "SessionLocal",
+            lambda: (_ for _ in ()).throw(AssertionError("Live worker must not open a database session")),
+        )
+        with pytest.raises(RuntimeError, match="live_trading_disabled_by_server"):
+            binance_trading_worker.run(interval_seconds=60)
 
-
-def test_live_worker_passes_policy_gate_only_after_explicit_user_confirmation(monkeypatch):
-    monkeypatch.setattr(binance_trading_worker, "_read_control", lambda: _control("live", True))
-    monkeypatch.setattr(
-        binance_trading_worker.dbmod,
-        "SessionLocal",
-        lambda: (_ for _ in ()).throw(AssertionError("Approved Live worker must proceed to preflight")),
-    )
-    with pytest.raises(AssertionError, match="proceed to preflight"):
-        binance_trading_worker.run(interval_seconds=60)
