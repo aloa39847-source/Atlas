@@ -151,7 +151,7 @@ def test_engine_integration_map_covers_registry_and_preserves_authority_boundari
     assert ENGINE_INTEGRATION_MAP["technical_analysis"]["decision_evidence"] is True
     assert ENGINE_INTEGRATION_MAP["news_analysis"]["decision_evidence"] is True
     assert ENGINE_INTEGRATION_MAP["risk_management"]["authority"] == "independent_veto"
-    assert ENGINE_INTEGRATION_MAP["trade_execution"]["authority"] == "supervised_worker_only_explicit_live_start_confirmation"
+    assert ENGINE_INTEGRATION_MAP["trade_execution"]["authority"] == "testnet_worker_only_live_hard_disabled"
     assert ENGINE_INTEGRATION_MAP["arbitrage_analysis"]["authority"] == "estimate_only_no_execution"
     assert ENGINE_INTEGRATION_MAP["self_evolution"]["authority"] == "explicit_approval_required"
     assert ENGINE_INTEGRATION_MAP["fundamental_analysis"]["decision_evidence"] is False
@@ -168,7 +168,7 @@ def test_detailed_engine_status_exposes_verified_integration_scope(tmp_path):
         assert len(rows) == 25
         assert rows["technical_analysis"]["details"]["integration"]["mode"] == "decision_pipeline"
         assert rows["fundamental_analysis"]["details"]["integration"]["mode"] == "on_demand"
-        assert rows["trade_execution"]["details"]["integration"]["authority"] == "supervised_worker_only_explicit_live_start_confirmation"
+        assert rows["trade_execution"]["details"]["integration"]["authority"] == "testnet_worker_only_live_hard_disabled"
         assert rows["risk_management"]["details"]["integration"]["authority"] == "independent_veto"
     finally:
         db.close()
